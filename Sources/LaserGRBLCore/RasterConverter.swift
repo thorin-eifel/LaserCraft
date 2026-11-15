@@ -30,7 +30,7 @@ public struct RasterImage {
     }
 }
 
-public enum GrayFormula: String, CaseIterable, Identifiable {
+public enum GrayFormula: String, CaseIterable, Identifiable, Codable {
     case simpleAverage = "Simple average"
     case weightedAverage = "Weighted average"
     case opticalCorrect = "Optical correct"
@@ -38,7 +38,7 @@ public enum GrayFormula: String, CaseIterable, Identifiable {
     public var id: String { rawValue }
 }
 
-public enum DitherMode: String, CaseIterable, Identifiable {
+public enum DitherMode: String, CaseIterable, Identifiable, Codable {
     case atkinson = "Atkinson", floydSteinberg = "Floyd-Steinberg", burkes = "Burkes", jarvis = "Jarvis-Judice-Ninke"
     case random = "Random", sierra2 = "Sierra 2", sierra3 = "Sierra 3", sierraLite = "Sierra Lite", stucki = "Stucki"
     public var id: String { rawValue }
@@ -62,18 +62,18 @@ public enum DitherMode: String, CaseIterable, Identifiable {
     }
 }
 
-public enum FillDirection: String, CaseIterable, Identifiable {
+public enum FillDirection: String, CaseIterable, Identifiable, Codable {
     case horizontal = "Horizontal", vertical = "Vertical", diagonal = "Diagonal"
     public var id: String { rawValue }
 }
 
-public enum RasterTool: String, CaseIterable, Identifiable {
+public enum RasterTool: String, CaseIterable, Identifiable, Codable {
     case lineToLine = "Line to line", dithering = "1 bit dithering"
     public var id: String { rawValue }
 }
 
 /// Image-to-engraving settings; defaults follow the Windows import window.
-public struct RasterOptions {
+public struct RasterOptions: Codable, Equatable {
     public var tool: RasterTool = .lineToLine
     public var formula: GrayFormula = .opticalCorrect
     public var red = 100, green = 100, blue = 100        // 40...160, custom formula only
@@ -90,6 +90,10 @@ public struct RasterOptions {
     public var minPower = 0, maxPower = 1000
     public var laserOn = "M3", laserOff = "M5"
     public var pwm = true
+    // crop (fractions of the picture removed on each side), rotation in degrees clockwise, mirroring
+    public var cropLeft = 0.0, cropTop = 0.0, cropRight = 0.0, cropBottom = 0.0
+    public var rotation = 0
+    public var flipH = false, flipV = false
     public var slowSkip = false                          // use G1 instead of G0 when skipping white
     public init() {}
 }
@@ -307,7 +311,7 @@ public enum RasterConverter {
 
     public static func generate(image: CGImage, options o: RasterOptions) -> String? {
         let (w, h) = pixelSize(o)
-        guard w * h <= 40_000_000, let bmp = RasterImage(cgImage: image, width: w, height: h) else { return nil }
+        guard w * h <= 40_000_000, let bmp = RasterImage(cgImage: transformed(image, o), width: w, height: h) else { return nil }
         return generate(bitmap: bmp, options: o)
     }
 
@@ -332,5 +336,152 @@ public extension RasterImage {
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
             return ctx.makeImage()
         }
+    }
+}
+
+
+// MARK: - crop, rotate, mirror
+
+public extension RasterConverter {
+    /// The picture after cropping, rotating (clockwise) and mirroring, in that order.
+    public static func transformed(_ image: CGImage, _ o: RasterOptions) -> CGImage {
+        var cur = image
+        let l = max(0, min(0.9, o.cropLeft)), t = max(0, min(0.9, o.cropTop))
+        let r = max(0, min(0.9, o.cropRight)), b = max(0, min(0.9, o.cropBottom))
+        if l + r < 0.95, t + b < 0.95, l > 0 || t > 0 || r > 0 || b > 0 {
+            let w = Double(cur.width), h = Double(cur.height)
+            let rect = CGRect(x: (w * l).rounded(), y: (h * t).rounded(),
+                              width: max(1, (w * (1 - l - r)).rounded()), height: max(1, (h * (1 - t - b)).rounded()))
+            if let c = cur.cropping(to: rect) { cur = c }
+        }
+        let rot = ((o.rotation % 360) + 360) % 360
+        guard rot != 0 || o.flipH || o.flipV else { return cur }
+        let w = cur.width, h = cur.height
+        let (nw, nh) = (rot == 90 || rot == 270) ? (h, w) : (w, h)
+        guard let ctx = CGContext(data: nil, width: nw, height: nh, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return cur }
+        ctx.interpolationQuality = .high
+        ctx.translateBy(x: CGFloat(nw) / 2, y: CGFloat(nh) / 2)
+        ctx.scaleBy(x: o.flipH ? -1 : 1, y: o.flipV ? -1 : 1)          // mirror the result ...
+        ctx.rotate(by: -CGFloat(rot) * .pi / 180)                      // ... after turning the picture clockwise
+        ctx.draw(cur, in: CGRect(x: -CGFloat(w) / 2, y: -CGFloat(h) / 2, width: CGFloat(w), height: CGFloat(h)))
+        return ctx.makeImage() ?? cur
+    }
+
+    /// Height / width of the picture after cropping and rotating (what the size fields must keep in proportion).
+    static func aspect(of image: CGImage, _ o: RasterOptions) -> Double {
+        let t = transformed(image, o)
+        return Double(t.height) / Double(max(1, t.width))
+    }
+}
+
+// MARK: - resolution helper
+
+/// Advice on how many lines per millimetre make sense for the laser's spot size.
+public enum ResolutionHelper {
+    /// About one line per spot diameter, in steps of 0.5, between 0.5 and 20 lines/mm.
+    public static func suggestedLinesPerMM(spotSize: Double) -> Double {
+        guard spotSize > 0 else { return 3 }
+        return min(20, max(0.5, ((1 / spotSize) * 2).rounded() / 2))
+    }
+
+    /// Lines closer together than 80 % of the spot overlap, so the same spot is burned twice.
+    public static func linesOverlap(linesPerMM: Double, spotSize: Double) -> Bool {
+        spotSize > 0 && linesPerMM > 1.25 / spotSize
+    }
+
+    /// Rough engraving time: every line is travelled over the full width at the engraving speed (mm/min).
+    public static func engravingSeconds(widthMM: Double, heightMM: Double, linesPerMM: Double, speed: Int) -> Double {
+        guard speed > 0 else { return 0 }
+        return heightMM * linesPerMM * widthMM / (Double(speed) / 60)
+    }
+}
+
+// MARK: - presets
+
+/// A named set of import settings. Size, offset, crop and rotation belong to the picture and are not part of it.
+public struct ImagePreset: Codable, Identifiable, Equatable {
+    public var id = UUID()
+    public var name: String
+    public var options: RasterOptions
+    public var minPowerPercent: Double
+    public var maxPowerPercent: Double
+    public var builtIn = false
+
+    public init(name: String, options: RasterOptions, minPowerPercent: Double = 0, maxPowerPercent: Double = 100, builtIn: Bool = false) {
+        self.name = name; self.options = options; self.minPowerPercent = minPowerPercent; self.maxPowerPercent = maxPowerPercent; self.builtIn = builtIn
+    }
+
+    /// `target` with this preset's processing settings; the picture's own geometry is kept.
+    public func applied(to target: RasterOptions) -> RasterOptions {
+        var o = options
+        o.widthMM = target.widthMM; o.heightMM = target.heightMM
+        o.offsetX = target.offsetX; o.offsetY = target.offsetY
+        o.cropLeft = target.cropLeft; o.cropTop = target.cropTop; o.cropRight = target.cropRight; o.cropBottom = target.cropBottom
+        o.rotation = target.rotation; o.flipH = target.flipH; o.flipV = target.flipV
+        o.minPower = target.minPower; o.maxPower = target.maxPower     // recomputed from the percentages by the dialog
+        return o
+    }
+
+    public static let builtIns: [ImagePreset] = {
+        var photo = RasterOptions(); photo.linesPerMM = 3; photo.markSpeed = 1500; photo.laserOn = "M4"
+        var fast = RasterOptions(); fast.linesPerMM = 1.5; fast.markSpeed = 3000; fast.laserOn = "M4"
+        var fine = RasterOptions(); fine.linesPerMM = 6; fine.markSpeed = 800; fine.laserOn = "M4"
+        var logo = RasterOptions(); logo.tool = .lineToLine; logo.contrast = 150; logo.brightness = 105; logo.whiteClip = 12
+        logo.linesPerMM = 5; logo.markSpeed = 1200; logo.laserOn = "M4"
+        var dots = RasterOptions(); dots.tool = .dithering; dots.dithering = .atkinson; dots.linesPerMM = 4; dots.markSpeed = 1500; dots.laserOn = "M4"
+        return [
+            ImagePreset(name: "Photo", options: photo, builtIn: true),
+            ImagePreset(name: "Fast draft", options: fast, builtIn: true),
+            ImagePreset(name: "Fine detail", options: fine, builtIn: true),
+            ImagePreset(name: "Sharp logo", options: logo, builtIn: true),
+            ImagePreset(name: "Black and white dots", options: dots, builtIn: true),
+        ]
+    }()
+}
+
+// MARK: - crop to the subject
+
+public extension RasterConverter {
+    /// Fractions of the picture to cut off on each side so that only the subject remains. The background is what the picture
+    /// edge looks like (transparent or a flat colour, composited on white); everything that differs clearly from it is subject.
+    /// Returns nil when there is no clear subject (an empty or completely filled picture) or nothing would be cut.
+    static func subjectCrop(of image: CGImage, tolerance: Int = 20, margin: Double = 0.01) -> (left: Double, top: Double, right: Double, bottom: Double)? {
+        let scale = min(1, 800.0 / Double(max(image.width, image.height)))
+        let w = max(2, Int(Double(image.width) * scale)), h = max(2, Int(Double(image.height) * scale))
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // gray after compositing on white (the bitmap is premultiplied, so white shines through where it is transparent)
+        var gray = [Int](repeating: 255, count: w * h)
+        for i in 0..<(w * h) {
+            let a = Int(px[i * 4 + 3]), add = 255 - a
+            let r = min(255, Int(px[i * 4]) + add), g = min(255, Int(px[i * 4 + 1]) + add), b = min(255, Int(px[i * 4 + 2]) + add)
+            gray[i] = (r * 299 + g * 587 + b * 114) / 1000
+        }
+        // background level: the median of the border pixels
+        var border: [Int] = []
+        for x in 0..<w { border.append(gray[x]); border.append(gray[(h - 1) * w + x]) }
+        for y in 0..<h { border.append(gray[y * w]); border.append(gray[y * w + w - 1]) }
+        border.sort()
+        let bg = border[border.count / 2]
+        var minX = w, maxX = -1, minY = h, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w where abs(gray[y * w + x] - bg) > tolerance {
+                if x < minX { minX = x }; if x > maxX { maxX = x }
+                if y < minY { minY = y }; if y > maxY { maxY = y }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let fw = Double(w), fh = Double(h)
+        var l = Double(minX) / fw - margin, t = Double(minY) / fh - margin
+        var r = Double(w - 1 - maxX) / fw - margin, b = Double(h - 1 - maxY) / fh - margin
+        l = max(0, l); t = max(0, t); r = max(0, r); b = max(0, b)
+        // the sliders go to 45 % per side
+        l = min(0.45, l); t = min(0.45, t); r = min(0.45, r); b = min(0.45, b)
+        if l < 0.005 && t < 0.005 && r < 0.005 && b < 0.005 { return nil }
+        return (l, t, r, b)
     }
 }

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import Combine
 import LaserGRBLCore
 
 struct CustomButton: Codable, Identifiable, Equatable {
@@ -40,11 +41,27 @@ final class AppModel: ObservableObject {
         didSet { saveButtons() }
     }
     @Published var preview = PreviewModel()
+    // layout, tools, materials, profiles
+    let layout = LayoutModel()
+    @Published var mainMode: MainMode = .job
+    @Published var tool: ToolSheet?
+    /// True when the loaded job was generated from the layout (it is made again before a start if the layout changed).
+    var jobFromLayout = false
+    let materials = MaterialDB(builtinData: AppModel.builtinMaterialsData(),
+                               userFile: AppModel.supportDirectory.appendingPathComponent("materials.json"))
+    let profiles = ProfileStore(directory: AppModel.supportDirectory)
+    @Published var activeProfileID: String?
+    @Published var networkMachines: [String] = UserDefaults.standard.stringArray(forKey: "networkMachines") ?? []
+    @Published var discovered: [NetworkDiscovery.Found] = []
+    let discovery = NetworkDiscovery()
     @Published var showImageImport = false
     @Published var importURL: URL?
     @Published var showGrblConfig = false
     @Published var alertMessage: String?
     @Published var framePower: Double = 0
+    /// True while the Mac is being kept awake for a running job.
+    @Published private(set) var keepingAwake = false
+    let sleepGuard = SleepGuard()
     @Published var showConsole: Bool = UserDefaults.standard.object(forKey: "showConsole") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showConsole, forKey: "showConsole") }
     }
@@ -55,6 +72,175 @@ final class AppModel: ObservableObject {
     static let bauds = [9600, 19200, 38400, 57600, 115200, 230400, 250000, 460800, 921600]
 
     private var refreshTimer: Timer?
+    private var cancellables = Set<AnyCancellable>()
+
+    // MARK: resume a stopped job
+
+    /// Where the last job stopped (kept for the next launch, so a job can be continued after a crash or a power cut).
+    struct StopInfo: Codable, Equatable { var name: String; var count: Int; var line: Int }
+    @Published var stopInfo: StopInfo? = {
+        UserDefaults.standard.data(forKey: "lastStop").flatMap { try? JSONDecoder().decode(StopInfo.self, from: $0) }
+    }()
+    @Published var showResume = false
+    @Published var resumeLine = 0            // 0-based program line the Resume sheet starts with
+
+    /// Grbl acknowledges lines before it has moved: take a few lines back so nothing is skipped.
+    static let resumeSafetyLines = 16
+
+    private func rememberStop(_ info: StopInfo?) {
+        stopInfo = info
+        if let info = info, let data = try? JSONEncoder().encode(info) { UserDefaults.standard.set(data, forKey: "lastStop") }
+        else { UserDefaults.standard.removeObject(forKey: "lastStop") }
+    }
+
+    /// The line to suggest in the Resume sheet for the loaded job.
+    var suggestedResumeLine: Int {
+        guard let p = controller.program else { return 0 }
+        if let s = stopInfo, s.name == p.name, s.count == p.commands.count { return min(max(0, s.line), p.commands.count - 1) }
+        return 0
+    }
+
+    func openResume(line: Int? = nil) {
+        guard controller.program != nil else { return }
+        resumeLine = line ?? suggestedResumeLine
+        showResume = true
+    }
+
+    /// Continue the job at `line` (0-based) — after the same safety check as a normal start.
+    func resumeJob(fromLine line: Int) {
+        confirmStart(fromCommand: line)
+    }
+
+    // MARK: cooling pauses and reconnecting
+
+    @Published private(set) var reconnecting = false
+    let reconnect = AutoReconnect()
+
+    func applyCoolingPrefs() {
+        let d = UserDefaults.standard
+        controller.coolingEnabled = d.object(forKey: "coolingEnabled") as? Bool ?? false
+        controller.coolingRunSeconds = Double(d.object(forKey: "coolRunMinutes") as? Int ?? 5) * 60
+        controller.coolingPauseSeconds = Double(d.object(forKey: "coolPauseMinutes") as? Int ?? 1) * 60
+    }
+
+    private func setUpReconnect() {
+        reconnect.isPortAvailable = { SerialPort.availablePorts().contains($0) }
+        reconnect.connect = { [weak self] port in
+            guard let self = self, self.controller.state == .disconnected else { return }
+            self.controller.connect(path: port, baud: self.baud)
+        }
+        reconnect.onGiveUp = { [weak self] in
+            guard let self = self else { return }
+            self.reconnecting = false
+            self.present(title: L("Could not reconnect"),
+                         message: L("The laser did not come back. Check the USB cable and the power, then press Connect."), style: .warning)
+        }
+    }
+
+    // MARK: updates
+
+    /// "1.0.0-beta.2" from Info.plist (CFBundleShortVersionString is kept numeric for macOS).
+    var currentVersion: AppVersion {
+        let text = Bundle.main.object(forInfoDictionaryKey: "LaserCraftVersion") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        return AppVersion(text) ?? AppVersion(major: 0, minor: 0, patch: 0)
+    }
+
+    /// `silent`: the automatic check at launch only speaks up when there is something new.
+    func checkForUpdates(silent: Bool) {
+        UpdateChecker.check(current: currentVersion) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .success(let release?):
+                let a = NSAlert()
+                a.messageText = L("A new version is available")
+                a.informativeText = L("%@ is available. You are using %@.", release.name, self.currentVersion.description)
+                a.addButton(withTitle: L("Download"))
+                a.addButton(withTitle: L("Later"))
+                if a.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(release.url) }
+            case .success(nil):
+                if !silent { self.alertMessage = L("LaserCraft is up to date (%@).", self.currentVersion.description) }
+            case .failure:
+                if !silent { self.alertMessage = L("Could not check for updates. Are you online?") }
+            }
+        }
+    }
+
+    private func autoCheckForUpdates() {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "autoUpdateCheck") as? Bool ?? true, Notifier.isAvailable else { return }
+        let last = d.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
+        guard Date().timeIntervalSince(last) > 24 * 3600 else { return }
+        d.set(Date(), forKey: "lastUpdateCheck")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.checkForUpdates(silent: true) }
+    }
+
+    // MARK: simulator ("demo machine")
+
+    /// Port name of the built-in simulated machine; it appears in the port list like a USB port.
+    static let simulatorPort = "simulator"
+    let simulator = GrblSimulator(speedFactor: 4)
+
+    func portName(_ path: String) -> String {
+        if path == AppModel.simulatorPort { return L("Simulator (demo machine)") }
+        if let a = NetworkAddress.parse(path) {
+            return "\(a.host) (\(a.kind == .webSocket ? "WebSocket" : a.kind == .telnet ? "Telnet" : "TCP"))"
+        }
+        return (path as NSString).lastPathComponent
+    }
+
+    // MARK: recent files
+
+    @Published var recentFiles: [URL] = (UserDefaults.standard.stringArray(forKey: "recentFiles") ?? []).map { URL(fileURLWithPath: $0) }
+
+    func noteRecent(_ url: URL) {
+        var list = recentFiles.filter { $0 != url }
+        list.insert(url, at: 0)
+        recentFiles = Array(list.prefix(10))
+        UserDefaults.standard.set(recentFiles.map { $0.path }, forKey: "recentFiles")
+    }
+
+    func clearRecents() {
+        recentFiles = []
+        UserDefaults.standard.set([String](), forKey: "recentFiles")
+    }
+
+    // MARK: diagnostics
+
+    private var versionText: String {
+        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        return "\(currentVersion) (\(b))"
+    }
+
+    func copyDiagnosticReport() {
+        let report = Diagnostics.report(appVersion: versionText, system: ProcessInfo.processInfo.operatingSystemVersionString,
+                                        port: selectedPort, baud: baud, controller: controller)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        alertMessage = L("The diagnostic report was copied to the clipboard. Paste it into your bug report.")
+    }
+
+    func saveConsoleLog() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "lasercraft-console.txt"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try Diagnostics.consoleText(controller.console).appending("\n").write(to: url, atomically: true, encoding: .utf8) }
+        catch { alertMessage = L("Could not save: %@", error.localizedDescription) }
+    }
+
+    // MARK: warnings before a job
+
+    /// Problems of the loaded job for the machine that is connected (empty while the machine's settings are unknown).
+    var jobWarnings: [JobWarning] {
+        guard let p = controller.program, !controller.settings.isEmpty else { return [] }
+        return JobCheck.run(program: p, settings: controller.settings, workOffset: controller.workOffset)
+    }
+
+    /// Double-click in the preview: move the laser head (laser off) to this work position.
+    func jogToPoint(x: Double, y: Double) {
+        controller.jogTo(x: x, y: y, feed: jogFeed)
+    }
 
     // MARK: preferences (also edited in the Settings window through @AppStorage)
 
@@ -97,7 +283,7 @@ final class AppModel: ObservableObject {
 
     func resetPreferences() {
         let d = UserDefaults.standard
-        for k in ["appearance", "appLanguage", "soundOnFinish", "soundVolume", "notifyOnFinish", "alertOnError", "autoConnect", "rapidRate",
+        for k in ["appearance", "appLanguage", "soundOnFinish", "soundVolume", "showSimulator", "autoReconnect", "autoUpdateCheck", "coolingEnabled", "coolRunMinutes", "coolPauseMinutes", "keepAwake", "keepDisplayOn", "notifyOnFinish", "alertOnError", "autoConnect", "rapidRate",
                   "previewShowTravel", "previewShowGrid", "previewFollowsAppearance", "AppleLanguages"] { d.set(nil, forKey: k) }
         applyAppearance()
     }
@@ -109,7 +295,7 @@ final class AppModel: ObservableObject {
         jogStep = d.object(forKey: "jogStep") as? Double ?? 10
         jogFeed = d.object(forKey: "jogFeed") as? Double ?? 3000
         if let data = d.data(forKey: "customButtons"), let b = try? JSONDecoder().decode([CustomButton].self, from: data) {
-            customButtons = AppModel.migrated(b)
+            customButtons = AppModel.addingCenterButton(AppModel.migrated(b))
         } else {
             customButtons = AppModel.defaultButtons()
         }
@@ -118,7 +304,15 @@ final class AppModel: ObservableObject {
         refreshPorts()
         applyAppearance()
         controller.onEvent = { [weak self] event in self?.handle(event) }
-        if flag("autoConnect", false), !selectedPort.isEmpty {
+        observeSleep()
+        applyCoolingPrefs()
+        setUpReconnect()
+        autoCheckForUpdates()
+        controller.$state.sink { [weak self] state in
+            guard let self = self, state == .disconnected, self.simulator.isRunning else { return }
+            DispatchQueue.main.async { self.simulator.stop() }
+        }.store(in: &cancellables)
+        if flag("autoConnect", false), !selectedPort.isEmpty, selectedPort != AppModel.simulatorPort {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self = self, self.controller.state == .disconnected, self.ports.contains(self.selectedPort) else { return }
                 self.controller.connect(path: self.selectedPort, baud: self.baud)
@@ -144,6 +338,7 @@ final class AppModel: ObservableObject {
             make("Unlock", "$X", icon: "unlock"),
             make("Set Zero Here", "G92 X0 Y0", icon: "target", confirm: true),
             make("Go to Zero", "G90\nG0 X0 Y0", icon: "fit"),
+            make("Go to Center", "G90\nG0 X{centerX} Y{centerY}", icon: "center"),
             make("Aim (Laser 1%)", "M3 S10", icon: "target"),
             make("Laser Off", "M5", icon: "stop"),
         ]
@@ -151,7 +346,7 @@ final class AppModel: ObservableObject {
 
     /// Buttons saved by an earlier version carry their title in whatever language was active then
     /// (for example French). Recognise the built-in ones and make them follow the app language again.
-    static func migrated(_ buttons: [CustomButton], languages: [Bundle] = ["en", "de", "fr"].compactMap { lang -> Bundle? in
+    static func migrated(_ buttons: [CustomButton], languages: [Bundle] = ["en", "de", "fr", "es", "it", "pt-BR"].compactMap { lang -> Bundle? in
         Bundle.main.path(forResource: lang, ofType: "lproj").flatMap { Bundle(path: $0) }
     }) -> [CustomButton] {
         let defaults = defaultButtons()
@@ -168,6 +363,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Buttons saved before "Go to Center" existed get it once, right after "Go to Zero" (later it can be deleted again).
+    static func addingCenterButton(_ buttons: [CustomButton], defaults: UserDefaults = .standard) -> [CustomButton] {
+        guard !defaults.bool(forKey: "centerButtonAdded") else { return buttons }
+        defaults.set(true, forKey: "centerButtonAdded")
+        guard !buttons.contains(where: { $0.gcode.contains("{centerX}") }),
+              let center = defaultButtons().first(where: { $0.gcode.contains("{centerX}") }) else { return buttons }
+        var list = buttons
+        if let i = list.firstIndex(where: { $0.titleKey == "Go to Zero" || $0.gcode == "G90\nG0 X0 Y0" }) { list.insert(center, at: i + 1) }
+        else { list.append(center) }
+        return list
+    }
+
     private func saveButtons() {
         if let data = try? JSONEncoder().encode(customButtons) { UserDefaults.standard.set(data, forKey: "customButtons") }
     }
@@ -178,20 +385,31 @@ final class AppModel: ObservableObject {
     }
 
     func refreshPorts() {
-        let list = SerialPort.availablePorts()
+        let real = SerialPort.availablePorts()
+        let showSim = UserDefaults.standard.object(forKey: "showSimulator") as? Bool ?? true
+        var network = networkMachines
+        for f in discovered where !network.contains(f.address.url) { network.append(f.address.url) }
+        let list = real + network + (showSim ? [AppModel.simulatorPort] : [])
         if list != ports { ports = list }
         if selectedPort.isEmpty || !list.contains(selectedPort) {
-            if let usb = list.first(where: { $0.contains("usb") }) ?? list.first { selectedPort = usb }
+            if let usb = real.first(where: { $0.contains("usb") }) ?? list.first { selectedPort = usb }
         }
     }
 
     func toggleConnection() {
+        reconnect.stop(); reconnecting = false
         if controller.state == .disconnected {
             guard !selectedPort.isEmpty else {
                 alertMessage = L("No serial port found. Plug in the laser's USB cable and refresh the list of ports.")
                 return
             }
-            controller.connect(path: selectedPort, baud: baud)
+            applyProfile(forConnection: selectedPort)
+            if selectedPort == AppModel.simulatorPort {
+                guard let path = simulator.start() else { alertMessage = L("The simulator could not be started."); return }
+                controller.connect(path: path, baud: baud)
+            } else {
+                controller.connect(path: selectedPort, baud: baud)
+            }
         } else {
             controller.disconnect()
         }
@@ -211,7 +429,12 @@ final class AppModel: ObservableObject {
         let ext = url.pathExtension.lowercased()
         if ["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "heic"].contains(ext) {
             importURL = url; showImageImport = true
+        } else if ext == "svg" {
+            tool = .vector(.svg(url))
+        } else if ext == ProjectIO.fileExtension {
+            openProject(url)
         } else { loadGCode(url) }
+        noteRecent(url)
     }
 
     func loadGCode(_ url: URL) {
@@ -227,7 +450,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setProgram(_ p: GCodeProgram) {
+    func setProgram(_ p: GCodeProgram, fromLayout: Bool = false) {
+        jobFromLayout = fromLayout
         controller.load(p)
         preview.set(program: p)
         preview.requestFit = true
@@ -267,7 +491,24 @@ final class AppModel: ObservableObject {
             a.addButton(withTitle: L("Send")); a.addButton(withTitle: L("Cancel"))
             if a.runModal() != .alertFirstButtonReturn { return }
         }
-        b.gcode.split(whereSeparator: \.isNewline).forEach { controller.send(String($0)) }
+        var code = b.gcode
+        if code.contains("{centerX}") || code.contains("{centerY}") {
+            // the middle of the output area ($130 / $131), which the machine has to tell first
+            guard let w = Double(controller.settings[130] ?? ""), let h = Double(controller.settings[131] ?? ""), w > 0, h > 0 else {
+                alertMessage = L("The size of the work area is not known yet. Connect to the machine so that it can be read ($130, $131).")
+                return
+            }
+            code = code.replacingOccurrences(of: "{centerX}", with: Self.coordinate(w / 2))
+                .replacingOccurrences(of: "{centerY}", with: Self.coordinate(h / 2))
+        }
+        code.split(whereSeparator: \.isNewline).forEach { controller.send(String($0)) }
+    }
+
+    static func coordinate(_ v: Double) -> String {
+        var s = String(format: "%.3f", v)
+        while s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s
     }
 
     /// Traces the outline of the job; with a power above 0 the laser is on, so the safety check applies.
@@ -281,29 +522,81 @@ final class AppModel: ObservableObject {
 
     /// Start button, menu item and shortcut all end up here. The job only starts after the eye-protection
     /// check has been confirmed; this cannot be switched off.
-    func confirmStart() {
+    func confirmStart(fromCommand start: Int = 0) {
+        if mainMode == .layout || jobFromLayout, layout.needsGenerate, controller.canStartJob { useLayoutAsJob() }
         guard controller.canStartJob, let p = controller.program else { return }
-        let time = L("Estimated time: %@", GCodeProgram.formatDuration(p.estimatedSeconds))
-        guard LaserSafety.confirm(title: L("Start “%@”?", p.name), confirmButton: L("Start"), extra: time) else { return }
+        var extra = L("Estimated time: %@", GCodeProgram.formatDuration(p.estimatedSeconds))
+        if start > 0 {
+            extra = L("The job continues at line %d of %d. The laser first travels to the end of the previous line with the laser off.", start + 1, p.commands.count) + "\n\n" + extra
+        }
+        let warnings = jobWarnings
+        if !warnings.isEmpty {
+            extra += "\n\n" + L("Please check before you start:") + "\n" + warnings.map { "⚠︎ " + $0.text }.joined(separator: "\n")
+        }
+        guard LaserSafety.confirm(title: L("Start “%@”?", p.name), confirmButton: L("Start"), extra: extra) else { return }
         Notifier.requestPermission()
-        controller.startJob()
+        controller.startJob(fromCommand: start)
+    }
+
+    // MARK: keep the Mac awake while a job runs
+
+    /// Called when a job starts: no sleep (and no App Nap) until it ends. Before and after a job the Mac sleeps as usual.
+    func beginStayAwake() {
+        guard flag("keepAwake", true) else { return }
+        sleepGuard.begin(keepDisplayOn: flag("keepDisplayOn", false))
+        keepingAwake = sleepGuard.isActive
+    }
+
+    func endStayAwake() {
+        sleepGuard.end()
+        keepingAwake = false
+    }
+
+    /// A sleep that cannot be prevented (closing a MacBook lid, low battery, Apple menu → Sleep) must not leave the laser
+    /// burning: the job is paused (feed hold) right before the Mac sleeps, and the person is told after waking up.
+    private func observeSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.controller.jobRunning else { return }
+            self.controller.feedHold()
+            self.sleptDuringJob = true
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self, self.sleptDuringJob else { return }
+            self.sleptDuringJob = false
+            if self.controller.jobRunning {
+                self.present(title: L("The Mac went to sleep"),
+                             message: L("The job was paused when the Mac went to sleep. Check the machine, then press Resume to continue or Stop to end the job."),
+                             style: .warning)
+            }
+        }
     }
 
     // MARK: sounds, alerts and notifications
 
     private var jobErrorAlerted = false
+    private var sleptDuringJob = false
     private var alertShowing = false
 
     private func handle(_ event: ControllerEvent) {
         switch event {
         case .connected:
+            reconnect.stop()
+            if reconnecting { reconnecting = false; alertMessage = nil }
             Sounds.play(.connected)
         case .connectionFailed(let message):
+            if reconnecting { return }          // the next attempt is already scheduled
             Sounds.play(.connectionFailed)
             present(title: L("Connection failed"),
                     message: message + "\n\n" + L("Check that the USB cable is plugged in, the laser is switched on and the baud rate matches."),
                     style: .warning)
+        case .coolingStarted:
+            Sounds.play(.go)
+        case .coolingEnded:
+            Sounds.play(.started)
         case .jobStarted:
+            CameraModel.shared.jobStarted(name: controller.program?.name ?? "job")
+            beginStayAwake()
             jobErrorAlerted = false
             Sounds.play(.started)
         case .lineError(let message, let line):
@@ -321,6 +614,14 @@ final class AppModel: ObservableObject {
                                                 (L("Home"), { [weak self] in self?.controller.home() })])
         case .connectionLost:
             Sounds.play(.error)
+            // A USB wobble without a job: try to get the connection back by itself. During a job it is never safe to
+            // carry on automatically, so the person is told instead.
+            if !controller.jobRunning, flag("autoReconnect", true), selectedPort != AppModel.simulatorPort, !selectedPort.isEmpty,
+               !NetworkAddress.isNetwork(selectedPort) {
+                reconnecting = true
+                reconnect.start(port: selectedPort)
+                return
+            }
             present(title: L("Connection lost"),
                     message: L("The connection to the machine was lost and the job was stopped. If the laser is still on, switch the machine off with its own power switch."),
                     style: .critical)
@@ -329,7 +630,18 @@ final class AppModel: ObservableObject {
             present(title: L("Controller restarted"),
                     message: L("The controller restarted during the job, so the job was stopped."), style: .warning)
         case .jobFinished(let aborted, let errors, let seconds, let name):
-            guard !aborted else { return }
+            endStayAwake()   // the Mac may sleep again, whatever the outcome
+            CameraModel.shared.jobEnded()
+            recordUsage(aborted: aborted, errors: errors, seconds: seconds, name: name)
+            if aborted {
+                // remember where it stopped so it can be continued later
+                if let p = controller.program, controller.jobExecuted > 0 {
+                    rememberStop(StopInfo(name: p.name, count: p.commands.count,
+                                          line: max(0, controller.executedProgramCommands - AppModel.resumeSafetyLines)))
+                }
+                return
+            }
+            rememberStop(nil)
             Sounds.play(.finished)
             let time = GCodeProgram.formatDuration(seconds)
             var body = L("“%@” finished in %@.", name, time)
@@ -341,6 +653,8 @@ final class AppModel: ObservableObject {
             }
         }
     }
+
+    func presentInfo(title: String, message: String) { present(title: title, message: message, style: .informational) }
 
     /// Shows a sheet on the main window (or a dialog when there is none); only one at a time.
     private func present(title: String, message: String, style: NSAlert.Style, actions: [(String, () -> Void)] = []) {

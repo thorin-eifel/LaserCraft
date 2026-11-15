@@ -18,6 +18,12 @@ final class PreviewModel: ObservableObject {
     private var doneUpTo = 0
 
     @Published var revision = 0          // bump to redraw
+
+    /// Zoom commands from the View menu.
+    enum Command { case zoomIn, zoomOut, fit }
+    private(set) var command: Command = .fit
+    @Published private(set) var commandSerial = 0
+    func perform(_ c: Command) { command = c; commandSerial += 1 }
     @Published var requestFit = false
 
     func set(program p: GCodeProgram) {

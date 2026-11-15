@@ -27,6 +27,9 @@ public enum ControllerEvent {
     case alarm(message: String)
     case connectionLost
     case controllerRestarted
+    /// The automatic cooling pause began / ended.
+    case coolingStarted(seconds: Double)
+    case coolingEnded
 }
 
 public struct JobSettings: Equatable {
@@ -48,6 +51,8 @@ public final class GrblController: ObservableObject {
     @Published public private(set) var machinePosition = Point3()
     @Published public private(set) var workOffset = Point3()
     @Published public private(set) var version: GrblVersion?
+    /// Which firmware answered (Grbl, grblHAL, FluidNC, Ortur, Longer).
+    @Published public private(set) var firmware = FirmwareInfo()
     @Published public private(set) var console: [ConsoleLine] = []
     @Published public private(set) var settings: [Int: String] = [:]
     @Published public private(set) var overrideFeed = 100
@@ -71,7 +76,7 @@ public final class GrblController: ObservableObject {
     public var onEvent: ((ControllerEvent) -> Void)?
 
     // MARK: private state
-    private var port: SerialPort?
+    private var port: Transport?
     private var rxBuffer = Data()
     private var manualQueue: [String] = []
     private var jobQueue: [String] = []
@@ -82,6 +87,21 @@ public final class GrblController: ObservableObject {
     private var connectDeadline: Date?
     private var logCounter = 0
     private var holdByUser = false
+    private var holdByCooling = false
+    /// All lines are acknowledged, but Grbl may still be moving: the job ends when it reports Idle.
+    private var jobAwaitingIdle = false
+    private var jobStartCommand = 0          // first program line of this job (resume)
+    private var jobPreambleCount = 0         // restore lines sent before the program on a resume
+    private var lastTickDate: Date?
+    private var runAccumulated: TimeInterval = 0
+    private var coolingEndsAt: Date?
+
+    // Automatic cooling: pause the job regularly so a diode laser can cool down.
+    public var coolingEnabled = false
+    public var coolingRunSeconds: Double = 300
+    public var coolingPauseSeconds: Double = 60
+    /// Seconds of the current cooling pause that are left (nil when not cooling).
+    @Published public private(set) var coolingRemaining: TimeInterval?
     private var jobTotalCommands = 0
     private var jobRemainingPasses = 0
     private var jobFooterQueued = false
@@ -106,11 +126,14 @@ public final class GrblController: ObservableObject {
         guard let p = program, jobRunning || jobExecuted > 0 else { return 0 }
         let headerCount = jobSettings.header.split(whereSeparator: \.isNewline)
             .filter { !GrblParser.cleanLine(String($0)).isEmpty }.count
-        let e = max(0, jobExecuted - headerCount)
+        let e = max(0, jobExecuted - headerCount - jobPreambleCount)
         let n = max(1, p.commands.count)
         let passes = max(1, jobSettings.passes)
-        if e >= n * passes { return p.commands.count }
-        return e % n
+        let firstLen = max(0, p.commands.count - jobStartCommand)
+        if e < firstLen { return jobStartCommand + e }
+        let e2 = e - firstLen
+        if e2 >= n * (passes - 1) { return p.commands.count }
+        return e2 % n
     }
 
     public var supportsTrueJogging: Bool { (version ?? GrblVersion(major: 1, minor: 1)) >= GrblVersion(major: 1, minor: 1) }
@@ -127,8 +150,13 @@ public final class GrblController: ObservableObject {
 
     // MARK: connection
 
+    /// Connects to a serial port (`/dev/cu.…`) or a network address (`telnet://host`, `tcp://host:port`, `ws://host:81`).
     public func connect(path: String, baud: Int) {
         guard port == nil else { return }
+        if let address = NetworkAddress.parse(path) {
+            connectNetwork(address)
+            return
+        }
         let p = SerialPort(path: path)
         p.onData = { [weak self] data in self?.receive(data) }
         p.onClose = { [weak self] in self?.connectionLost() }
@@ -140,9 +168,32 @@ public final class GrblController: ObservableObject {
             return
         }
         port = p
+        beginSession(description: L("Connected to %@ at %d baud", path, baud))
+    }
+
+    private func connectNetwork(_ address: NetworkAddress) {
+        let p = NetworkPort(address: address)
+        p.onData = { [weak self] data in self?.receive(data) }
+        p.onClose = { [weak self] in self?.connectionLost() }
+        p.onFail = { [weak self] message in
+            guard let self = self else { return }
+            self.log(L("Connection failed: %@", message), .error)
+            self.onEvent?(.connectionFailed(message: message))
+            self.teardown()
+        }
+        p.onReady = { [weak self] in
+            self?.beginSession(description: L("Connected to %@", address.url))
+        }
+        port = p
         resetStreams()
         setState(.connecting)
-        log(L("Connected to %@ at %d baud", path, baud), .info)
+        p.open()
+    }
+
+    private func beginSession(description: String) {
+        resetStreams()
+        setState(.connecting)
+        log(description, .info)
         connectDeadline = Date().addingTimeInterval(10)
         startTimer()
         // Many boards reboot when the port opens; if not, a soft reset makes Grbl send its welcome line.
@@ -177,6 +228,7 @@ public final class GrblController: ObservableObject {
         port?.close(); port = nil
         resetStreams()
         version = nil
+        firmware = FirmwareInfo(); CodeTables.firmware = firmware
         buffer = nil
         setState(.disconnected)
     }
@@ -204,7 +256,42 @@ public final class GrblController: ObservableObject {
             return
         }
         sendRealtime(0x3F, quiet: true)   // "?"
+        manageCooling()
         pump()
+    }
+
+    /// Automatic cooling: after `coolingRunSeconds` of burning the job is paused (feed hold, laser off) for
+    /// `coolingPauseSeconds`, then it carries on by itself.
+    private func manageCooling() {
+        let now = Date()
+        let dt = lastTickDate.map { now.timeIntervalSince($0) } ?? 0
+        lastTickDate = now
+        guard coolingEnabled, jobRunning else {
+            runAccumulated = 0
+            if coolingEndsAt != nil { coolingEndsAt = nil; coolingRemaining = nil; holdByCooling = false }
+            return
+        }
+        if let end = coolingEndsAt {
+            let remaining = end.timeIntervalSince(now)
+            if remaining <= 0 {
+                coolingEndsAt = nil; coolingRemaining = nil; holdByCooling = false; runAccumulated = 0
+                sendRealtime(0x7E)
+                log(L("Cooling pause over, the job continues"), .info)
+                onEvent?(.coolingEnded)
+            } else {
+                coolingRemaining = remaining
+            }
+        } else if state == .run {
+            runAccumulated += min(dt, 1)
+            if runAccumulated >= coolingRunSeconds {
+                holdByCooling = true; holdByUser = false
+                coolingEndsAt = now.addingTimeInterval(coolingPauseSeconds)
+                coolingRemaining = coolingPauseSeconds
+                sendRealtime(0x21)
+                log(L("Cooling pause: the laser rests for %d seconds", Int(coolingPauseSeconds)), .info)
+                onEvent?(.coolingStarted(seconds: coolingPauseSeconds))
+            }
+        }
     }
 
     // MARK: sending
@@ -286,6 +373,8 @@ public final class GrblController: ObservableObject {
         case .welcome(let w):
             log(w, .received)
             version = GrblParser.parseWelcome(w)
+            firmware = FirmwareInfo.detect(welcome: w, previous: FirmwareInfo())
+            CodeTables.firmware = firmware
             // a (re)start empties Grbl's pipeline
             pending.removeAll(); usedBuffer = 0
             if jobRunning { log(L("The controller restarted during the job; job stopped"), .error); onEvent?(.controllerRestarted); finishJob(aborted: true) }
@@ -295,7 +384,11 @@ public final class GrblController: ObservableObject {
             settings[n] = v
             log(line, .received)
         case .info(let s):
-            if s.hasPrefix("[VER:"), let v = GrblParser.parseWelcome("Grbl " + s.dropFirst(5)) { version = v }
+            if s.hasPrefix("[VER:") {
+                if let v = GrblParser.parseWelcome("Grbl " + s.dropFirst(5)) { version = v }
+                firmware = FirmwareInfo.detect(welcome: nil, ver: s, previous: firmware)
+                CodeTables.firmware = firmware
+            }
             log(s, .received)
         case .other(let s):
             log(s, .received)
@@ -328,8 +421,12 @@ public final class GrblController: ObservableObject {
     private func apply(_ r: StatusReport) {
         connectDeadline = nil
         var st = r.state
+        if jobAwaitingIdle && pending.isEmpty && (r.state == .idle || r.state == .check) {
+            jobAwaitingIdle = false
+            finishJob(aborted: false)
+        }
         if jobRunning && st == .idle { st = .run }   // Grbl reports Idle during G4 dwell
-        if st == .hold && !holdByUser { st = .autoHold }
+        if st == .hold { if holdByCooling { st = .cooling } else if !holdByUser { st = .autoHold } }
         if state == .connecting, version == nil {
             // The board was already running: no welcome line was seen.
             queueStartupQueries()
@@ -377,15 +474,20 @@ public final class GrblController: ObservableObject {
         isConnected && !jobRunning && (program?.isEmpty == false) && (state == .idle)
     }
 
-    public func startJob() {
+    /// Starts the loaded job. With `fromCommand` > 0 the job continues at that line of the program (0-based): the machine is
+    /// first brought to where the previous line ended and the feed rate, units, modes and laser state are restored.
+    public func startJob(fromCommand: Int = 0) {
         guard canStartJob, let p = program else { return }
+        jobStartCommand = (fromCommand > 0 && fromCommand < p.commands.count) ? fromCommand : 0
         jobSent = 0; jobExecuted = 0; jobErrors = 0; errorLines = []
+        runAccumulated = 0; coolingEndsAt = nil; coolingRemaining = nil; holdByCooling = false; jobAwaitingIdle = false
         jobRemainingPasses = max(1, jobSettings.passes)
         jobStart = Date()
         jobFooterQueued = false
         jobRunning = true
         enqueuePass(first: true, program: p)
-        log(L("Job started: %d lines × %d", p.commands.count, jobSettings.passes), .info)
+        if jobStartCommand > 0 { log(L("Job continues at line %d of %d", jobStartCommand + 1, p.commands.count), .info) }
+        log(L("Job started: %d lines × %d", p.commands.count - jobStartCommand, jobSettings.passes), .info)
         onEvent?(.jobStarted)
         pump()
     }
@@ -393,7 +495,15 @@ public final class GrblController: ObservableObject {
     private func enqueuePass(first: Bool, program p: GCodeProgram) {
         var lines: [String] = []
         if first { lines += jobSettings.header.split(whereSeparator: \.isNewline).map { GrblParser.cleanLine(String($0)) } }
-        lines += p.commands
+        var preamble: [String] = []
+        if first, jobStartCommand > 0 {
+            preamble = p.resumeCommands(from: jobStartCommand)
+            lines += preamble
+            lines += p.commands[jobStartCommand...]
+        } else {
+            lines += p.commands
+        }
+        if first { jobPreambleCount = preamble.count }
         jobQueue = lines.filter { !$0.isEmpty }
         // header lines are part of the progress counters so executed == target at the end
         if first { jobTotalCommands = 0 }
@@ -402,6 +512,7 @@ public final class GrblController: ObservableObject {
 
     private func jobQueueDrained() {
         guard let p = program else { finishJob(aborted: false); return }
+        if jobAwaitingIdle { return }
         if jobRemainingPasses > 1 {
             jobRemainingPasses -= 1
             enqueuePass(first: false, program: p)
@@ -416,13 +527,16 @@ public final class GrblController: ObservableObject {
                 return
             }
         }
-        finishJob(aborted: false)
+        // Grbl acknowledges a line as soon as it is in its planner buffer (15 moves), so the machine is usually still
+        // working here. The job counts as finished when Grbl reports Idle (see `apply`).
+        jobAwaitingIdle = true
     }
 
     private func finishJob(aborted: Bool) {
         guard jobRunning else { return }
         jobRunning = false
         jobQueue.removeAll()
+        coolingEndsAt = nil; coolingRemaining = nil; holdByCooling = false; runAccumulated = 0; jobAwaitingIdle = false
         let secs = jobStart.map { Date().timeIntervalSince($0) } ?? 0
         let text = aborted
             ? L("Job stopped after %@", GCodeProgram.formatDuration(secs))
@@ -444,8 +558,13 @@ public final class GrblController: ObservableObject {
 
     // MARK: realtime controls
 
-    public func feedHold() { holdByUser = true; sendRealtime(0x21) }
-    public func resume() { holdByUser = false; sendRealtime(0x7E) }
+    public func feedHold() { holdByUser = true; holdByCooling = false; coolingEndsAt = nil; coolingRemaining = nil; sendRealtime(0x21) }
+    /// Resumes after a pause; during an automatic cooling pause it ends the pause early.
+    public func resume() {
+        holdByUser = false; holdByCooling = false
+        coolingEndsAt = nil; coolingRemaining = nil; runAccumulated = 0
+        sendRealtime(0x7E)
+    }
     public func safetyDoor() { sendRealtime(0x84) }
 
     public func softReset() {

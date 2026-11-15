@@ -27,14 +27,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct AppCommands: Commands {
     @ObservedObject var model: AppModel
     @ObservedObject var controller: GrblController
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { model.checkForUpdates(silent: false) }
+        }
         CommandGroup(replacing: .newItem) {
             Button("Open G-code…") { model.openGCode() }.keyboardShortcut("o")
             Button("Import Image…") { model.importImage() }.keyboardShortcut("i")
+            Menu("Open Recent") {
+                ForEach(model.recentFiles, id: \.self) { url in
+                    Button(url.lastPathComponent) { model.openFile(url) }
+                }
+                Divider()
+                Button("Clear Menu") { model.clearRecents() }.disabled(model.recentFiles.isEmpty)
+            }
+            .disabled(model.recentFiles.isEmpty)
+            Divider()
+            Button("Import SVG…") { model.addSVGToLayout() }.keyboardShortcut("i", modifiers: [.command, .shift])
+            Button("Add Text…") { model.tool = .vector(.text) }
+            Button("Trace Image…") { model.traceImage() }
+            Divider()
+            Button("New Project") { model.newProject() }.keyboardShortcut("n")
+            Button("Open Project…") { model.openProject() }.keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Save Project…") { model.saveProject() }.keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(model.layout.doc.isEmpty)
+            Button("Save Project As…") { model.saveProject(saveAs: true) }.disabled(model.layout.doc.isEmpty)
             Divider()
             Button("Save G-code…") { model.saveGCode() }.keyboardShortcut("s")
                 .disabled(controller.program == nil)
+        }
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") { if model.mainMode == .layout { model.layout.undo() } else { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) } }
+                .keyboardShortcut("z")
+            Button("Redo") { if model.mainMode == .layout { model.layout.redo() } else { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) } }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
+        CommandMenu("Tools") {
+            Button("Test Patterns…") { model.tool = .testPatterns }
+            Button("Materials…") { model.tool = .materials }
+            Divider()
+            Button("Machine Profiles…") { model.tool = .profiles }
+            Button("Laser Statistics…") { model.tool = .statistics }
+            Button("Network Machines…") { model.tool = .network }
+            Divider()
+            Button("Camera") { openWindow(id: "camera") }
+        }
+        CommandGroup(before: .toolbar) {
+            Button("Zoom In") { model.preview.perform(.zoomIn) }.keyboardShortcut("+")
+            Button("Zoom Out") { model.preview.perform(.zoomOut) }.keyboardShortcut("-")
+            Button("Fit to window") { model.preview.perform(.fit) }.keyboardShortcut("0")
+            Divider()
         }
         CommandMenu("Machine") {
             Button(L(controller.isConnected || controller.state == .connecting ? "Disconnect" : "Connect")) { model.toggleConnection() }
@@ -51,11 +95,14 @@ struct AppCommands: Commands {
             Divider()
             Button("Grbl configuration…") { model.showGrblConfig = true }
                 .disabled(!controller.isConnected)
+            Divider()
+            Button("Save Console Log…") { model.saveConsoleLog() }
+            Button("Copy Diagnostic Report") { model.copyDiagnosticReport() }
         }
         CommandMenu("Job") {
             Button("Start") { model.confirmStart() }.keyboardShortcut("r")
                 .disabled(!controller.canStartJob)
-            if controller.state == .hold || controller.state == .autoHold {
+            if controller.state == .hold || controller.state == .autoHold || controller.state == .cooling {
                 Button("Resume") { controller.resume() }.keyboardShortcut("p", modifiers: [.command, .option])
             } else {
                 Button("Pause") { controller.feedHold() }.keyboardShortcut("p", modifiers: [.command, .option])
@@ -63,6 +110,9 @@ struct AppCommands: Commands {
             }
             Button("Stop") { controller.abortJob() }.keyboardShortcut(".")
                 .disabled(!controller.jobRunning)
+            Divider()
+            Button("Resume Job from Line…") { model.openResume() }
+                .disabled(!controller.canStartJob)
         }
     }
 }
@@ -79,6 +129,11 @@ struct LaserGRBLApp: App {
         }
         .defaultSize(width: 1240, height: 780)
         .commands { AppCommands(model: model, controller: model.controller) }
+
+        Window("Camera", id: "camera") {
+            CameraWindow()
+        }
+        .defaultSize(width: 640, height: 520)
 
         Settings {
             SettingsView().environmentObject(model)

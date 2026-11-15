@@ -30,10 +30,20 @@ public final class GCodeProgram {
     public private(set) var burnBounds = Bounds()
     public private(set) var travelBounds = Bounds()
     public private(set) var maxPower: Float = 0
+    /// Highest feed rate (mm/min) used by a cutting move, and whether the job uses M3 / M4.
+    public private(set) var maxFeed: Double = 0
+    public private(set) var usesM3 = false
+    public private(set) var usesM4 = false
     public private(set) var estimatedSeconds: Double = 0
     /// Cumulative estimated seconds at the end of each command (for progress / time left).
     public private(set) var cumulativeSeconds: [Float] = []
     public private(set) var burnLength: Double = 0
+    /// Seconds with the laser on (estimate) and the same weighted by power (S), per command, cumulative.
+    public private(set) var cumulativeBurnSeconds: [Float] = []
+    public private(set) var cumulativeBurnPowerSeconds: [Double] = []
+    public var burnSeconds: Double { Double(cumulativeBurnSeconds.last ?? 0) }
+    /// Sum of seconds × S over the whole job; divide by the machine's S maximum for "full power equivalent" seconds.
+    public var burnPowerSeconds: Double { cumulativeBurnPowerSeconds.last ?? 0 }
     public var name: String
 
     public init(text: String, name: String = "Untitled", rapidRate: Double = 2000) {
@@ -78,7 +88,7 @@ public final class GCodeProgram {
         var feed = 1000.0
         var s = 0.0
         var laserOn = false
-        var seconds = 0.0
+        var seconds = 0.0, burnSec = 0.0, burnPS = 0.0
 
         for raw in text.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r" }) {
             let clean = GrblParser.cleanLine(String(raw))
@@ -108,7 +118,8 @@ public final class GCodeProgram {
                     if Int(w.value) == 4 { dwell = 0 }
                 case "M":
                     switch Int(w.value) {
-                    case 3, 4: laserOn = true
+                    case 3: laserOn = true; usesM3 = true
+                    case 4: laserOn = true; usesM4 = true
                     case 5: laserOn = false
                     default: break
                     }
@@ -147,10 +158,14 @@ public final class GCodeProgram {
                 }
                 if burning { burnLength += length }
                 let rate = motion == 0 ? rapidRate : max(feed, 1)
+                if motion != 0 { maxFeed = Swift.max(maxFeed, feed) }
                 seconds += length / rate * 60
+                if burning { burnSec += length / rate * 60; burnPS += length / rate * 60 * s }
                 x = tx; y = ty
             }
             cumulativeSeconds.append(Float(seconds))
+            cumulativeBurnSeconds.append(Float(burnSec))
+            cumulativeBurnPowerSeconds.append(burnPS)
         }
         estimatedSeconds = seconds
         if travelBounds.isEmpty { travelBounds.add(0, 0) }
@@ -193,6 +208,71 @@ public final class GCodeProgram {
         }
         pts[pts.count - 1] = b
         return pts
+    }
+
+    // MARK: resuming in the middle of a job
+
+    /// The machine state a job leaves behind after its first `index` lines (positions in mm).
+    public struct ResumeState: Equatable {
+        public var x = 0.0, y = 0.0
+        public var feed = 1000.0
+        public var power = 0.0
+        public var absolute = true
+        public var inches = false
+        public var motion = 0                 // 0 rapid, 1 linear (arcs count as linear)
+        public var laser: Int?                // 3, 4 or nil when the laser is off
+    }
+
+    /// Replays the first `index` lines (modal state only, nothing is sent anywhere).
+    public func resumeState(before index: Int) -> ResumeState {
+        var st = ResumeState()
+        for command in commands.prefix(max(0, index)) {
+            var nx: Double?, ny: Double?
+            for w in GCodeProgram.words(of: command.uppercased()) {
+                switch w.letter {
+                case "G":
+                    switch Int(w.value) {
+                    case 0: st.motion = 0
+                    case 1, 2, 3: st.motion = 1
+                    case 20: st.inches = true
+                    case 21: st.inches = false
+                    case 90: st.absolute = true
+                    case 91: st.absolute = false
+                    default: break
+                    }
+                case "M":
+                    switch Int(w.value) {
+                    case 3: st.laser = 3
+                    case 4: st.laser = 4
+                    case 5: st.laser = nil
+                    default: break
+                    }
+                case "F": st.feed = w.value * (st.inches ? 25.4 : 1)
+                case "S": st.power = w.value
+                case "X": nx = w.value
+                case "Y": ny = w.value
+                default: break
+                }
+            }
+            let k = st.inches ? 25.4 : 1.0
+            if let v = nx { st.x = st.absolute ? v * k : st.x + v * k }
+            if let v = ny { st.y = st.absolute ? v * k : st.y + v * k }
+        }
+        return st
+    }
+
+    /// Lines to send before `commands[index...]` so the job can continue there: laser off, go to where the
+    /// previous line ended, then restore feed rate, units, motion mode, distance mode and the laser state.
+    public func resumeCommands(from index: Int) -> [String] {
+        guard index > 0, index < commands.count else { return [] }
+        let st = resumeState(before: index)
+        var out = ["M5", "G90", "G21", String(format: "G0 X%.3f Y%.3f", st.x, st.y), String(format: "F%.0f", st.feed)]
+        if st.motion == 1 { out.append("G1") }
+        if st.inches { out.append("G20") }
+        if !st.absolute { out.append("G91") }
+        if let m = st.laser { out.append("M\(m) S\(Int(st.power))") }
+        else if st.power > 0 { out.append("S\(Int(st.power))") }
+        return out
     }
 
     public static func formatDuration(_ seconds: Double) -> String {

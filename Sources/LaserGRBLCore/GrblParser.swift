@@ -71,7 +71,7 @@ public enum GrblParser {
     /// "Grbl 1.1h ['$' for help]" -> 1.1h
     public static func parseWelcome(_ line: String) -> GrblVersion? {
         let parts = line.split(separator: " ")
-        guard parts.count >= 2, parts[0] == "Grbl" else { return nil }
+        guard parts.count >= 2, parts[0] == "Grbl" || parts[0] == "GrblHAL" else { return nil }
         let v = Array(parts[1])
         guard v.count >= 3, let maj = Int(String(v[0])), v[1] == ".", let min = Int(String(v[2])) else { return nil }
         return GrblVersion(major: maj, minor: min, build: v.count > 3 ? v[3] : " ")
@@ -141,22 +141,23 @@ public enum GrblParser {
     }
 
     public static func describeError(_ n: Int) -> String {
-        guard let e = CodeTables.errors[n] else { return "error:\(n)" }
-        let title = Loc.optional("grbl.error.\(n).title") ?? e.title
-        let detail = Loc.optional("grbl.error.\(n).detail") ?? e.detail
+        guard let e = CodeTables.errorEntry(n) else { return "error:\(n)" }
+        let title = e.standard ? (Loc.optional("grbl.error.\(n).title") ?? e.title) : e.title
+        let detail = e.standard ? (Loc.optional("grbl.error.\(n).detail") ?? e.detail) : e.detail
         return "error:\(n) \(title) — \(detail)"
     }
 
     public static func describeAlarm(_ n: Int) -> String {
-        guard let a = CodeTables.alarms[n] else { return "ALARM:\(n)" }
-        let title = Loc.optional("grbl.alarm.\(n).title") ?? a.title
-        let detail = Loc.optional("grbl.alarm.\(n).detail") ?? a.detail
+        guard let a = CodeTables.alarmEntry(n) else { return "ALARM:\(n)" }
+        let title = a.standard ? (Loc.optional("grbl.alarm.\(n).title") ?? a.title) : a.title
+        let detail = a.standard ? (Loc.optional("grbl.alarm.\(n).detail") ?? a.detail) : a.detail
         return "ALARM:\(n) \(title) — \(detail)"
     }
 
-    /// Name, units and description of a `$` setting in the current language.
+    /// Name, units and description of a `$` setting in the current language (vendor tables are shown in English).
     public static func describeSetting(_ n: Int) -> (name: String, units: String, detail: String)? {
-        guard let s = CodeTables.settings[n] else { return nil }
+        guard let s = CodeTables.settingEntry(n) else { return nil }
+        guard s.standard else { return (s.name, s.units, s.detail) }
         return (Loc.optional("grbl.setting.\(n).name") ?? s.name,
                 Loc.optional("grbl.unit.\(s.units)") ?? s.units,
                 Loc.optional("grbl.setting.\(n).detail") ?? s.detail)

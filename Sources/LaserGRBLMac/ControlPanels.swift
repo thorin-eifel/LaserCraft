@@ -44,7 +44,7 @@ struct LeftPanel: View {
             rowLabel("Port")
             Picker("Port", selection: $app.selectedPort) {
                 if app.ports.isEmpty { Text("No port found").tag("") }
-                ForEach(app.ports, id: \.self) { Text(($0 as NSString).lastPathComponent).tag($0) }
+                ForEach(app.ports, id: \.self) { Text(app.portName($0)).tag($0) }
             }
             .labelsHidden()
             .disabled(controller.state != .disconnected)
@@ -53,12 +53,16 @@ struct LeftPanel: View {
                 ForEach(AppModel.bauds, id: \.self) { Text(verbatim: String($0)).tag($0) }
             }
             .labelsHidden().frame(width: 84)
-            .disabled(controller.state != .disconnected)
+            .disabled(controller.state != .disconnected || NetworkAddress.isNetwork(app.selectedPort))
             .help("Baud rate (115200 for most controllers)")
             Button { app.refreshPorts() } label: { IconLabel("Refresh Ports", icon: "refresh", size: 13) }
                 .labelStyle(.iconOnly)
                 .disabled(controller.state != .disconnected)
                 .help("Refresh the list of ports")
+            Button { app.tool = .network } label: { IconLabel("Network Machines…", icon: "wifi", size: 13) }
+                .labelStyle(.iconOnly)
+                .disabled(controller.state != .disconnected)
+                .help("Connect over WiFi or Ethernet")
             Button { app.toggleConnection() } label: {
                 if controller.state == .disconnected { IconLabel("Connect", icon: "plug", size: 13) }
                 else { IconLabel("Disconnect", icon: "unplug", size: 13) }
@@ -145,6 +149,7 @@ struct CommandField: View {
 // MARK: - Command list (G-code lines with ✓ / ✕, or the console messages)
 
 struct CommandList: View {
+    @EnvironmentObject var app: AppModel
     @ObservedObject var controller: GrblController
     private enum Mode: String { case program, messages }
     @State private var mode: Mode = .program
@@ -185,6 +190,11 @@ struct CommandList: View {
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 6).frame(height: 18)
+                        .contentShape(Rectangle())
+                        .contextMenu {
+                            Button("Start Job from This Line…") { app.openResume(line: i) }
+                                .disabled(!controller.canStartJob)
+                        }
                         .id(i)
                     }
                 }
@@ -228,8 +238,13 @@ struct CommandList: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            Button { controller.clearConsole() } label: { IconLabel("Clear Console", icon: "trash", size: 11) }
-                .labelStyle(.iconOnly).buttonStyle(.borderless).help("Clear the console").padding(4)
+            HStack(spacing: 6) {
+                Button { app.saveConsoleLog() } label: { IconLabel("Save Console Log…", icon: "save", size: 11) }
+                    .help("Save the console as a text file")
+                Button { controller.clearConsole() } label: { IconLabel("Clear Console", icon: "trash", size: 11) }
+                    .help("Clear the console")
+            }
+            .labelStyle(.iconOnly).buttonStyle(.borderless).padding(4)
         }
     }
 
@@ -329,7 +344,7 @@ struct ActionRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
-                if controller.state == .hold || controller.state == .autoHold {
+                if controller.state == .hold || controller.state == .autoHold || controller.state == .cooling {
                     Button { controller.resume() } label: { IconLabel("Resume", icon: "play", size: 15) }
                         .help("Resume after a pause")
                 } else {
@@ -355,6 +370,7 @@ struct ActionRow: View {
 // MARK: - Status bar with override read-outs
 
 struct StatusBar: View {
+    @EnvironmentObject var app: AppModel
     @ObservedObject var controller: GrblController
     @State private var showFeed = false
     @State private var showRapid = false
@@ -371,6 +387,24 @@ struct StatusBar: View {
             }
             Divider().frame(height: 14)
             item("Estimated Time", value: controller.program.map { GCodeProgram.formatDuration($0.estimatedSeconds) } ?? "–")
+            if let left = controller.coolingRemaining {
+                Divider().frame(height: 14)
+                Label { Text(L("Cooling %@", GCodeProgram.formatDuration(left))).monospacedDigit() } icon: { UIcon(name: "snow", size: 12) }
+                    .lineLimit(1).fixedSize()
+                    .help("The laser rests so that it can cool down. Press Resume to carry on early.")
+            }
+            if app.reconnecting {
+                Divider().frame(height: 14)
+                Label { Text("Reconnecting…") } icon: { UIcon(name: "refresh", size: 12) }
+                    .lineLimit(1).fixedSize()
+                    .help("The connection dropped. LaserCraft tries to connect again.")
+            }
+            if app.keepingAwake {
+                Divider().frame(height: 14)
+                Label { Text("Mac stays awake") } icon: { UIcon(name: "awake", size: 12) }
+                    .labelStyle(.titleAndIcon).lineLimit(1).fixedSize()
+                    .help("The Mac will not go to sleep until the job has finished.")
+            }
             Divider().frame(height: 14)
             Text(message).lineLimit(1).truncationMode(.tail)
                 .foregroundStyle(controller.state == .alarm ? Color.red : Color.secondary)
@@ -402,7 +436,7 @@ struct StatusBar: View {
 
     private var message: String {
         if controller.state == .alarm { return controller.lastAlarm ?? L("Alarm — unlock or home the machine") }
-        if let v = controller.version { return L("Grbl %@", v.description) }
+        if let v = controller.version { return "\(controller.firmware.family.displayName) \(v.description)" }
         return ""
     }
 

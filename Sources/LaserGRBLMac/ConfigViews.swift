@@ -108,6 +108,7 @@ struct AppearanceSettings: View {
     @AppStorage("notifyOnFinish") private var notifyOnFinish = true
     @AppStorage("soundVolume") private var soundVolume = 0.7
     @AppStorage("alertOnError") private var alertOnError = true
+    @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
     @State private var languageChanged = false
     @State private var confirmReset = false
 
@@ -131,6 +132,9 @@ struct AppearanceSettings: View {
                     Text(verbatim: "English").tag("en")
                     Text(verbatim: "Deutsch").tag("de")
                     Text(verbatim: "Français").tag("fr")
+                    Text(verbatim: "Español").tag("es")
+                    Text(verbatim: "Italiano").tag("it")
+                    Text(verbatim: "Português (Brasil)").tag("pt-BR")
                 }
                 .onChange(of: language) { app.setLanguage(language); languageChanged = true }
                 if languageChanged {
@@ -158,6 +162,13 @@ struct AppearanceSettings: View {
             }
 
             Section {
+                Toggle("Check for updates automatically", isOn: $autoUpdateCheck)
+                HStack { Spacer(); Button("Check for Updates…") { app.checkForUpdates(silent: false) } }
+            } header: { Text("Updates") } footer: {
+                Text("LaserCraft only looks for a newer version on GitHub; it never installs anything by itself.")
+            }
+
+            Section {
                 Button("Restore Default Settings", role: .destructive) { confirmReset = true }
             }
         }
@@ -176,6 +187,8 @@ struct AppearanceSettings: View {
 struct ConnectionSettings: View {
     @EnvironmentObject var app: AppModel
     @AppStorage("autoConnect") private var autoConnect = false
+    @AppStorage("showSimulator") private var showSimulator = true
+    @AppStorage("autoReconnect") private var autoReconnect = true
 
     var body: some View {
         Form {
@@ -184,17 +197,14 @@ struct ConnectionSettings: View {
                     ForEach(AppModel.bauds, id: \.self) { Text(verbatim: String($0)).tag($0) }
                 }
                 Toggle("Connect automatically at launch", isOn: $autoConnect)
+                Toggle("Reconnect automatically if the USB connection drops", isOn: $autoReconnect)
+                Toggle("Show the simulator (demo machine) in the port list", isOn: $showSimulator)
+                    .onChange(of: showSimulator) { app.refreshPorts() }
             } header: { Text("Connection") } footer: {
                 Text("Most Grbl controllers use 115200 baud. Automatic connection uses the port selected in the main window.")
             }
             Section {
-                LabeledContent("Jog speed") {
-                    HStack(spacing: 4) {
-                        TextField("Jog speed", value: $app.jogFeed, format: .number).labelsHidden()
-                            .multilineTextAlignment(.trailing).frame(width: 70)
-                        Text("mm/min").foregroundStyle(.secondary)
-                    }
-                }
+                UnitRow("Jog speed", value: $app.jogFeed, range: 1...30000, unit: "mm/min", digits: 0)
                 Picker("Jog step", selection: $app.jogStep) {
                     ForEach([0.1, 0.5, 1, 5, 10, 50, 100], id: \.self) { Text(L("%@ mm", $0.formatted())).tag($0) }
                 }
@@ -208,6 +218,11 @@ struct JobSettingsTab: View {
     @EnvironmentObject var app: AppModel
     @ObservedObject var controller: GrblController
     @AppStorage("rapidRate") private var rapidRate = 2000.0
+    @AppStorage("keepAwake") private var keepAwake = true
+    @AppStorage("keepDisplayOn") private var keepDisplayOn = false
+    @AppStorage("coolingEnabled") private var coolingEnabled = false
+    @AppStorage("coolRunMinutes") private var coolRunMinutes = 5
+    @AppStorage("coolPauseMinutes") private var coolPauseMinutes = 1
 
     var body: some View {
         Form {
@@ -230,16 +245,26 @@ struct JobSettingsTab: View {
                     }
                 }
                 .help("0 = trace the outline with the laser off; a low value lets you see it")
-                LabeledContent("Rapid speed for time estimates") {
-                    HStack(spacing: 4) {
-                        TextField("Rapid speed", value: $rapidRate, format: .number).labelsHidden()
-                            .multilineTextAlignment(.trailing).frame(width: 70)
-                        Text("mm/min").foregroundStyle(.secondary)
-                    }
-                }
+                UnitRow("Rapid speed for time estimates", value: $rapidRate, range: 1...30000, unit: "mm/min", digits: 0)
                 .help("Used when the machine's $110 setting is not known yet")
             } footer: {
                 Text("Header and footer are also written when you save G-code.")
+            }
+            Section {
+                Toggle("Pause regularly to let the laser cool down", isOn: $coolingEnabled)
+                    .onChange(of: coolingEnabled) { app.applyCoolingPrefs() }
+                Stepper(L("Work for %d minutes", coolRunMinutes), value: $coolRunMinutes, in: 1...120)
+                    .disabled(!coolingEnabled).onChange(of: coolRunMinutes) { app.applyCoolingPrefs() }
+                Stepper(L("then rest for %d minutes", coolPauseMinutes), value: $coolPauseMinutes, in: 1...30)
+                    .disabled(!coolingEnabled).onChange(of: coolPauseMinutes) { app.applyCoolingPrefs() }
+            } header: { Text("Cooling") } footer: {
+                Text("Long engravings with a diode laser can overheat it. The job is paused (laser off) and continues by itself afterwards.")
+            }
+            Section {
+                Toggle("Keep the Mac awake while a job is running", isOn: $keepAwake)
+                Toggle("Also keep the display on", isOn: $keepDisplayOn).disabled(!keepAwake)
+            } header: { Text("Power") } footer: {
+                Text("The Mac can sleep before and after a job. A MacBook still sleeps when its lid is closed; the job is then paused.")
             }
         }
         .formStyle(.grouped)

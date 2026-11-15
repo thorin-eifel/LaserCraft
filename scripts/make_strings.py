@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Writes Resources/{en,de,fr}.lproj/Localizable.strings from translations.py and checks nothing is missing."""
+"""Writes Resources/{en,de,fr,es,it,pt-BR}.lproj/Localizable.strings from translations.py and checks nothing is missing."""
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import extract_keys
 import translations as T
+import translations_extra as X
+import translations_r3 as R3
+
+# release 3 strings: (de, fr, es, it, pt-BR)
+for _k, _v in R3.R3.items():
+    T.UI[_k] = (_v[0], _v[1])
+    X.EXTRA[_k] = (_v[2], _v[3], _v[4])
 
 root = pathlib.Path(__file__).resolve().parent.parent
 keys = extract_keys.keys()
@@ -49,4 +56,23 @@ def write(lang, idx):
 
 for lang, idx in (("en", 0), ("de", 0), ("fr", 1)):
     write(lang, idx)
-print(f"wrote {len(keys)} keys x 3 languages")
+
+# Spanish, Italian, Brazilian Portuguese: interface only (Grbl's own messages fall back to English)
+extra_missing = [k for k in keys if k not in X.EXTRA]
+if extra_missing:
+    print("MISSING TRANSLATIONS (es/it/pt-BR):")
+    for k in extra_missing:
+        print("  ", k)
+    sys.exit(1)
+for lang, idx in (("es", 0), ("it", 1), ("pt-BR", 2)):
+    lines = [f"/* LaserCraft - {lang} */"]
+    for k in keys:
+        v = X.EXTRA[k][idx]
+        if v.count("%") != k.count("%"):
+            print("FORMAT MISMATCH", lang, k)
+            sys.exit(1)
+        lines.append(f'"{esc(k)}" = "{esc(v)}";')
+    d = root / "Resources" / f"{lang}.lproj"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Localizable.strings").write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(f"wrote {len(keys)} keys x 6 languages")

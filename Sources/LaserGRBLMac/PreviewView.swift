@@ -14,6 +14,9 @@ struct PreviewView: View {
     @State private var lastSize = CGSize(width: 600, height: 400)
     /// Once the person pans or zooms, the view stops re-fitting itself when the window is resized.
     @State private var userAdjusted = false
+    /// Pointer position in work coordinates. A reference type that this view does not observe, so moving the mouse
+    /// only redraws the small read-out and never the (possibly huge) job drawing.
+    @State private var hoverState = HoverState()
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("previewShowTravel") private var showTravel = true
@@ -45,6 +48,20 @@ struct PreviewView: View {
             .overlay(alignment: .topLeading) { zoomControls }
             .overlay(alignment: .topTrailing) { readout }
             .overlay(alignment: .bottomLeading) { legend }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let p): hoverState.work = workPoint(p, height: lastSize.height)
+                case .ended: hoverState.work = nil
+                }
+            }
+            .simultaneousGesture(
+                SpatialTapGesture(count: 2).onEnded { v in
+                    guard controller.isConnected, controller.state == .idle || controller.state == .jog else { return }
+                    let w = workPoint(v.location, height: lastSize.height)
+                    app.jogToPoint(x: w.x, y: w.y)
+                }
+            )
+            .help(controller.isConnected ? "Double-click to move the laser head here (laser off)" : "")
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { v in
@@ -65,6 +82,14 @@ struct PreviewView: View {
             )
             .onAppear { lastSize = geo.size; fit(size: geo.size) }
             .onChange(of: geo.size) { _, new in lastSize = new; if !userAdjusted { fit(size: new) } }
+            .onChange(of: preview.commandSerial) {
+                let mid = CGPoint(x: lastSize.width / 2, y: lastSize.height / 2)
+                switch preview.command {
+                case .zoomIn: zoom(to: min(200, scale * 1.4), around: mid)
+                case .zoomOut: zoom(to: max(0.05, scale / 1.4), around: mid)
+                case .fit: fit(size: lastSize)
+                }
+            }
             .onChange(of: preview.requestFit) { _, f in
                 if f { fit(size: lastSize); preview.requestFit = false }
             }
@@ -106,7 +131,8 @@ struct PreviewView: View {
         if let (w, h) = machineArea {
             let p0 = toScreen(0, 0, size.height), p1 = toScreen(w, h, size.height)
             let r = CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p1.x - p0.x), height: abs(p1.y - p0.y))
-            ctx.stroke(Path(r), with: .color(.blue.opacity(0.35)), style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+            let tooBig = preview.program.map { JobCheck.exceedsMachine(program: $0, settings: controller.settings) } ?? false
+            ctx.stroke(Path(r), with: .color(tooBig ? Color.red.opacity(0.85) : Color.blue.opacity(0.35)), style: StrokeStyle(lineWidth: tooBig ? 2 : 1, dash: [6, 4]))
         }
 
         // axes
@@ -166,6 +192,11 @@ struct PreviewView: View {
 
     // MARK: zoom & fit
 
+    /// Screen point -> work coordinates in mm.
+    private func workPoint(_ p: CGPoint, height: CGFloat) -> (x: Double, y: Double) {
+        (Double((p.x - origin.x) / scale), Double((height - p.y - origin.y) / scale))
+    }
+
     private func zoom(to s: CGFloat, around p: CGPoint) {
         userAdjusted = true
         // keep the machine point under `p` fixed
@@ -197,17 +228,10 @@ struct PreviewView: View {
         origin = CGPoint(x: ox, y: oy)
     }
 
-    /// Work position of the laser, like the X/Y read-out of the Windows version.
+    /// Work position of the laser, like the X/Y read-out of the Windows version, plus the pointer position.
     private var readout: some View {
-        let p = controller.workPosition
-        return Text(L("X: %.3f   Y: %.3f", p.x, p.y))
-            .font(.system(.callout, design: .monospaced))
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(panelColor.opacity(reduceTransparency ? 1 : 0.85), in: RoundedRectangle(cornerRadius: 6))
-            .foregroundColor(inkColor)
-            .padding(8)
-            .accessibilityLabel(Text("Position"))
-            .accessibilityValue(Text(String(format: "X %.3f, Y %.3f", p.x, p.y)))
+        PositionReadout(controller: controller, hover: hoverState, ink: inkColor, label: labelColor,
+                        panel: panelColor.opacity(reduceTransparency ? 1 : 0.85))
     }
 
     private var accessibilitySummary: String {
@@ -242,11 +266,43 @@ struct PreviewView: View {
                     Text(L("Size %.1f × %.1f mm   Origin X%.1f Y%.1f", p.burnBounds.width, p.burnBounds.height, p.burnBounds.minX, p.burnBounds.minY)).font(.caption2)
                 }
                 Text(L("Estimated time %@", GCodeProgram.formatDuration(p.estimatedSeconds))).font(.caption2)
+                ForEach(Array(app.jobWarnings.enumerated()), id: \.offset) { _, w in
+                    Text("⚠︎ " + w.text).font(.caption2).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 360, alignment: .leading)
+                }
             }
         }
         .padding(6)
         .background(panelColor.opacity(reduceTransparency ? 1 : 0.85), in: RoundedRectangle(cornerRadius: 6))
         .foregroundColor(inkColor)
         .padding(8)
+    }
+}
+
+
+final class HoverState: ObservableObject {
+    @Published var work: (x: Double, y: Double)?
+}
+
+struct PositionReadout: View {
+    @ObservedObject var controller: GrblController
+    @ObservedObject var hover: HoverState
+    let ink: Color, label: Color, panel: Color
+
+    var body: some View {
+        let p = controller.workPosition
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(L("X: %.3f   Y: %.3f", p.x, p.y))
+            if let h = hover.work {
+                Text(L("Pointer  X: %.1f   Y: %.1f", h.x, h.y)).font(.system(.caption, design: .monospaced)).foregroundColor(label)
+            }
+        }
+        .font(.system(.callout, design: .monospaced))
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(panel, in: RoundedRectangle(cornerRadius: 6))
+        .foregroundColor(ink)
+        .padding(8)
+        .accessibilityLabel(Text("Position"))
+        .accessibilityValue(Text(String(format: "X %.3f, Y %.3f", p.x, p.y)))
     }
 }

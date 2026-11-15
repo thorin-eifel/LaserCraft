@@ -1,3 +1,5 @@
+import Foundation
+
 // Generated from LaserGRBL/CSV/error_codes.csv and alarm_codes.csv (Grbl v1.1 codes).
 
 public enum CodeTables {
@@ -85,4 +87,110 @@ public enum CodeTables {
         131: ("Y-axis maximum travel", "millimeters", "Maximum Y-axis travel distance from homing switch. Determines valid machine space for soft-limits and homing search distances."),
         132: ("Z-axis maximum travel", "millimeters", "Maximum Z-axis travel distance from homing switch. Determines valid machine space for soft-limits and homing search distances."),
     ]
+}
+
+// MARK: - Other firmwares
+
+/// The kind of controller firmware that answered, found from its welcome line and `$I` information.
+public enum MachineFamily: String, Codable {
+    case grbl, grblHAL, fluidNC, ortur, longer
+
+    public var displayName: String {
+        switch self {
+        case .grbl: return "Grbl"
+        case .grblHAL: return "grblHAL"
+        case .fluidNC: return "FluidNC"
+        case .ortur: return "Ortur"
+        case .longer: return "Longer"
+        }
+    }
+}
+
+public struct FirmwareInfo: Equatable {
+    public var family: MachineFamily = .grbl
+    /// Text after the version in `[VER:…]`, for example "Ortur Laser Master 3".
+    public var vendor: String?
+    /// Ortur firmware generation as 140, 150, 170 … (selects the matching `$` table).
+    public var orturFirmware = 150
+    public init() {}
+
+    /// `welcome`: "Grbl 1.1f ['$' for help]", "GrblHAL 1.1f […]", "Grbl 3.7 [FluidNC v3.7.2 …]". `ver`: the `[VER:…]` line.
+    public static func detect(welcome: String?, ver: String? = nil, previous: FirmwareInfo = FirmwareInfo()) -> FirmwareInfo {
+        var f = previous
+        if let w = welcome {
+            if w.hasPrefix("GrblHAL") { f.family = .grblHAL }
+            else if w.localizedCaseInsensitiveContains("FluidNC") { f.family = .fluidNC }
+            else if w.hasPrefix("Grbl") { f.family = .grbl; f.vendor = nil }
+        }
+        if let v = ver {
+            // [VER:1.1f.20190830:Ortur Laser Master 3]
+            let body = v.hasPrefix("[VER:") ? String(v.dropFirst(5)).replacingOccurrences(of: "]", with: "") : v
+            let parts = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            let vendor = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+            if body.localizedCaseInsensitiveContains("FluidNC") { f.family = .fluidNC }
+            else if vendor.localizedCaseInsensitiveContains("Ortur") || vendor.localizedCaseInsensitiveContains("Aufero") {
+                if f.family != .grblHAL { f.family = .ortur }
+                f.orturFirmware = orturGeneration(body)
+            } else if vendor.localizedCaseInsensitiveContains("Longer") || vendor.localizedCaseInsensitiveContains("NanoDuo") {
+                f.family = .longer
+            }
+            if !vendor.isEmpty { f.vendor = vendor }
+        }
+        return f
+    }
+
+    /// 170 for "V1.7.x" style numbers anywhere in the text, otherwise 150.
+    static func orturGeneration(_ s: String) -> Int {
+        if let re = try? NSRegularExpression(pattern: "(?:OLF|V|v)?\\s?1[._]([4-9])"),
+           let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)), let r = Range(m.range(at: 1), in: s), let d = Int(s[r]) {
+            return 100 + d * 10
+        }
+        return 150
+    }
+
+    var isHALFamily: Bool { family == .grblHAL || family == .fluidNC }
+}
+
+extension CodeTables {
+    /// What the connected controller said it is; set by the controller, used for the wording of errors, alarms and settings.
+    public static var firmware = FirmwareInfo()
+
+    /// Error text; `standard` is true when it comes from the standard Grbl table (the only one that is translated).
+    static func errorEntry(_ n: Int) -> (title: String, detail: String, standard: Bool)? {
+        let source: [(Int, String, String)]?
+        switch firmware.family {
+        case .grblHAL, .fluidNC: source = VendorTables.halErrors
+        case .longer: source = VendorTables.longerErrors
+        default: source = nil
+        }
+        if let row = source?.first(where: { $0.0 == n }) { return (row.1, row.2, false) }
+        if let e = errors[n] { return (e.title, e.detail, true) }
+        return nil
+    }
+
+    static func alarmEntry(_ n: Int) -> (title: String, detail: String, standard: Bool)? {
+        let source: [(Int, String, String)]?
+        switch firmware.family {
+        case .grblHAL, .fluidNC: source = VendorTables.halAlarms
+        case .longer: source = VendorTables.longerAlarms
+        default: source = nil
+        }
+        if let row = source?.first(where: { $0.0 == n }) { return (row.1, row.2, false) }
+        if let a = alarms[n] { return (a.title, a.detail, true) }
+        return nil
+    }
+
+    static func settingEntry(_ n: Int) -> (name: String, units: String, detail: String, standard: Bool)? {
+        let source: [(Int, String, String, String)]?
+        switch firmware.family {
+        case .grblHAL: source = VendorTables.halSettings
+        case .ortur:
+            source = firmware.orturFirmware >= 170 ? VendorTables.orturSettings17 : firmware.orturFirmware >= 150 ? VendorTables.orturSettings15 : VendorTables.orturSettings14
+        case .longer: source = VendorTables.longerSettings
+        default: source = nil
+        }
+        if let row = source?.first(where: { $0.0 == n }) { return (row.1, row.2, row.3, false) }
+        if let s = settings[n] { return (s.name, s.units, s.detail, true) }
+        return nil
+    }
 }

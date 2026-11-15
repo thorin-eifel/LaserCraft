@@ -14,7 +14,9 @@ enum Symbols {
         "list": "list.bullet", "document": "doc.text",
         "up": "arrow.up", "down": "arrow.down", "left": "arrow.left", "right": "arrow.right",
         "upleft": "arrow.up.left", "upright": "arrow.up.right", "downleft": "arrow.down.left", "downright": "arrow.down.right",
-        "check": "checkmark", "cross": "xmark",
+        "check": "checkmark", "cross": "xmark", "awake": "cup.and.saucer.fill", "rotl": "rotate.left", "rotr": "rotate.right", "snow": "snowflake",
+        "crop": "crop", "undo": "arrow.uturn.backward", "redo": "arrow.uturn.forward", "copy": "doc.on.doc", "center": "plus.viewfinder",
+        "layers": "square.3.layers.3d", "camera": "camera", "wifi": "wifi", "tools": "wrench.and.screwdriver", "chart": "chart.bar", "book": "books.vertical",
     ]
 
     static func name(for key: String) -> String { map[key] ?? key }

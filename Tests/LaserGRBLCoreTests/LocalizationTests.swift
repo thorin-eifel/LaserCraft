@@ -16,17 +16,17 @@ final class LocalizationTests: XCTestCase {
     }
 
     func testAllLanguagesHaveTheSameInterfaceKeys() throws {
-        let en = try strings("en"), de = try strings("de"), fr = try strings("fr")
+        let en = try strings("en")
         let ui = Set(en.keys)
         XCTAssertGreaterThan(ui.count, 150)
-        let deUI = Set(de.keys.filter { !$0.hasPrefix("grbl.") }), frUI = Set(fr.keys.filter { !$0.hasPrefix("grbl.") })
-        XCTAssertEqual(ui, deUI, "German differs: \(ui.symmetricDifference(deUI))")
-        XCTAssertEqual(ui, frUI, "French differs: \(ui.symmetricDifference(frUI))")
-        // format specifiers must survive translation
-        for k in en.keys {
-            for lang in [de, fr] {
+        for code in ["de", "fr", "es", "it", "pt-BR"] {
+            let lang = try strings(code)
+            let keys = Set(lang.keys.filter { !$0.hasPrefix("grbl.") })
+            XCTAssertEqual(ui, keys, "\(code) differs: \(ui.symmetricDifference(keys))")
+            // format specifiers must survive translation
+            for k in en.keys {
                 let a = k.components(separatedBy: "%").count, b = (lang[k] ?? "").components(separatedBy: "%").count
-                XCTAssertEqual(a, b, "format mismatch for \(k)")
+                XCTAssertEqual(a, b, "\(code): format mismatch for \(k)")
             }
         }
     }
@@ -63,6 +63,18 @@ final class LocalizationTests: XCTestCase {
         XCTAssertTrue(GrblParser.describeError(20).contains("Commande non prise en charge"))
         XCTAssertEqual(GrblParser.describeSetting(130)?.name, "Course max. axe X")
         XCTAssertEqual(GrblParser.describeSetting(0)?.units, "microsecondes")
+        try useLanguage("es")
+        XCTAssertEqual(L("Connect"), "Conectar")
+        XCTAssertEqual(MachineState.idle.localizedName, "Libre")
+        XCTAssertEqual(L("Job stopped after %@", "0:01:00"), "Trabajo detenido tras 0:01:00")
+        try useLanguage("it")
+        XCTAssertEqual(L("Connect"), "Connetti")
+        XCTAssertEqual(MachineState.run.localizedName, "In esecuzione")
+        try useLanguage("pt-BR")
+        XCTAssertEqual(L("Connect"), "Conectar")
+        XCTAssertEqual(L("Resume"), "Retomar")
+        // Grbl's own messages are not translated into these languages and fall back to English
+        XCTAssertTrue(GrblParser.describeError(20).contains("Unsupported command"))
         try useLanguage("en")
         XCTAssertTrue(GrblParser.describeError(20).contains("Unsupported command"))
     }

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
-    <key>CFBundleLocalizations</key><array><string>en</string><string>de</string><string>fr</string></array>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>de</string><string>fr</string><string>es</string><string>it</string><string>pt-BR</string></array>
     <key>CFBundleName</key><string>LaserCraft</string>
     <key>CFBundleDisplayName</key><string>LaserCraft</string>
     <key>CFBundleIdentifier</key><string>com.lasercraft.mac</string>
@@ -11,10 +11,14 @@
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>LaserCraftVersion</key><string>1.0.0-beta.3</string>
+    <key>CFBundleVersion</key><string>3</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSCameraUsageDescription</key><string>LaserCraft shows a camera next to the laser and can take time-lapse pictures while a job runs.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>LaserCraft connects to laser controllers on your WiFi or Ethernet network (FluidNC, Grbl_ESP32, Ortur WiFi).</string>
+    <key>NSBonjourServices</key><array><string>_telnet._tcp</string><string>_ws._tcp</string></array>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -22,6 +26,31 @@
             <key>CFBundleTypeRole</key><string>Editor</string>
             <key>LSItemContentTypes</key><array><string>public.plain-text</string></array>
             <key>CFBundleTypeExtensions</key><array><string>nc</string><string>gcode</string><string>gc</string><string>ngc</string><string>tap</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>SVG image</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSItemContentTypes</key><array><string>public.svg-image</string></array>
+            <key>CFBundleTypeExtensions</key><array><string>svg</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>LaserCraft project</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSItemContentTypes</key><array><string>com.lasercraft.project</string></array>
+            <key>CFBundleTypeExtensions</key><array><string>lasercraft</string></array>
+            <key>LSTypeIsPackage</key><true/>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.lasercraft.project</string>
+            <key>UTTypeDescription</key><string>LaserCraft project</string>
+            <key>UTTypeConformsTo</key><array><string>com.apple.package</string><string>public.composite-content</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key><array><string>lasercraft</string></array>
+            </dict>
         </dict>
     </array>
 </dict>
