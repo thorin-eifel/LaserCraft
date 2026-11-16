@@ -121,7 +121,7 @@ final class TracerTests: XCTestCase {
 
     func testAFilledSquareBecomesOneClosedOutlineOfTheRightSize() {
         let g = image(40, 40) { x, y in x >= 10 && x < 30 && y >= 8 && y < 28 }
-        var o = TraceOptions(); o.smoothing = 0
+        var o = TraceOptions(); o.smoothing = 0; o.curves = false
         let r = Tracer.trace(gray: g, width: 40, height: 40, options: o)
         XCTAssertEqual(r.count, 1)
         XCTAssertTrue(r[0].closed)
@@ -147,7 +147,7 @@ final class TracerTests: XCTestCase {
 
     func testInvertAndThreshold() {
         let g = image(30, 30) { x, y in x < 15 }                     // left half black
-        var o = TraceOptions(); o.invert = true; o.smoothing = 0
+        var o = TraceOptions(); o.invert = true; o.smoothing = 0; o.curves = false
         let r = Tracer.trace(gray: g, width: 30, height: 30, options: o)
         XCTAssertEqual(VectorMath.bounds(r).minX, 15, accuracy: 1e-9)
         o.invert = false; o.threshold = 0                            // nothing is darker than 0

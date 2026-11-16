@@ -95,6 +95,9 @@ public struct RasterOptions: Codable, Equatable {
     public var rotation = 0
     public var flipH = false, flipV = false
     public var slowSkip = false                          // use G1 instead of G0 when skipping white
+    /// Bidirectional engraving: the lines run in the opposite direction land a little off (the laser lags). This shifts
+    /// the backward lines by this many mm (from the scan offset test). Optional so that older presets and projects still load.
+    public var scanOffsetMM: Double? = nil
     public init() {}
 }
 
@@ -260,9 +263,11 @@ public enum RasterConverter {
             let len = s.reverse ? -s.len : s.len
             var body: String
             let tail = o.pwm ? power(s.color) : (f ? o.laserOff : o.laserOn)
+            // lines run backwards land off by the lag of the laser; shift them (only when the lines run both ways)
+            let lag = (!uni && s.reverse) ? (o.scanOffsetMM ?? 0) : 0
             switch s.kind {
-            case .x: cumX += len; body = "X\(fx(cumX)) \(tail)"
-            case .y: cumY += len; body = "Y\(fy(cumY)) \(tail)"
+            case .x: cumX += len; body = "X\(format(Double(cumX) / res + o.offsetX + lag)) \(tail)"
+            case .y: cumY += len; body = "Y\(format(Double(cumY) / res + o.offsetY + lag)) \(tail)"
             case .d: cumX += len; cumY -= len; body = "X\(fx(cumX)) Y\(fy(cumY)) \(tail)"
             case .vsep: cumY += 1; body = "Y\(fy(cumY))"
             case .hsep: cumX += 1; body = "X\(fx(cumX))"
@@ -483,5 +488,39 @@ public extension RasterConverter {
         l = min(0.45, l); t = min(0.45, t); r = min(0.45, r); b = min(0.45, b)
         if l < 0.005 && t < 0.005 && r < 0.005 && b < 0.005 { return nil }
         return (l, t, r, b)
+    }
+}
+
+
+// MARK: - free rotation and resizing
+
+public extension RasterConverter {
+    /// The picture scaled to the given size in pixels.
+    static func resized(_ image: CGImage, width: Int, height: Int) -> CGImage {
+        let w = max(1, width), h = max(1, height)
+        guard w != image.width || h != image.height,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage() ?? image
+    }
+
+    /// The picture turned counter-clockwise by any angle, on a white sheet just big enough to hold it (the corners stay white,
+    /// which is not engraved).
+    static func rotatedFree(_ image: CGImage, degrees: Double) -> CGImage {
+        let r = degrees * .pi / 180
+        let c = abs(cos(r)), s = abs(sin(r))
+        let w = Double(image.width), h = Double(image.height)
+        let nw = max(1, Int((w * c + h * s).rounded(.up))), nh = max(1, Int((w * s + h * c).rounded(.up)))
+        guard let ctx = CGContext(data: nil, width: nw, height: nh, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: nw, height: nh))
+        ctx.interpolationQuality = .high
+        ctx.translateBy(x: Double(nw) / 2, y: Double(nh) / 2)
+        ctx.rotate(by: r)
+        ctx.draw(image, in: CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+        return ctx.makeImage() ?? image
     }
 }

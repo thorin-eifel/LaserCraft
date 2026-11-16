@@ -1,0 +1,23 @@
+name: Bug report
+description: Something does not work as described in the manual.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations: { required: true }
+  - type: textarea
+    id: report
+    attributes:
+      label: Diagnostic report
+      description: In LaserCraft choose *Machine → Copy Diagnostic Report* and paste it here (it contains versions, the machine's settings and the console, but no file names of your pictures).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: LaserCraft version and macOS version
+      placeholder: "1.0.0-beta.6, macOS 15.2"
+    validations: { required: true }

@@ -130,6 +130,7 @@ Press **Import Image** (**⌘I**) and choose a picture (PNG, JPEG, BMP, TIFF, GI
 | | **Invert** | Swap dark and light. |
 | Laser | **Speed** | Engraving speed in mm/min. |
 | | **Power min / max** | Power range in % of the machine's maximum (`$30`). |
+| | **Scan offset** | For two-way engraving: shifts the lines that run backwards by this many mm (the laser lags a little, so the backward lines land off and edges look jagged). Find the value with the *Scan offset* test pattern. Shown only when *Engrave in one direction only* is off. |
 | | **Laser mode** | M3 constant power, or **M4 dynamic power** (recommended with Grbl laser mode `$32=1`). |
 | | **Machine supports power control (PWM)** | Turn off only for machines that can switch the laser on/off but not dim it. |
 
@@ -157,6 +158,24 @@ not read: convert text to paths first.
 
 ![SVG import](docs/images/svg-import.png)
 
+### Import a DXF or PDF file
+
+The same command (*File → Import Vector File…*, **⇧⌘I**, or drop the file on the window) also reads **DXF** and **PDF** files.
+
+- **DXF** (ASCII, from CAD programs, LibreCAD, Fusion, Inkscape export): lines, arcs, circles, ellipses, polylines (with their
+  rounded corners), splines and blocks (also scaled and turned) are read. The drawing's units are converted to mm; if the file
+  does not name them, 1 unit is 1 mm. The layer names come along. Text, hatches, dimensions, 3D solids and paper space are not
+  read. *Binary* DXF files must be saved again as ASCII.
+- **PDF:** the vector lines of the chosen page (a page selector appears for longer files) at their real size. Pictures and scanned
+  pages are not vector data: use *Trace Image* for them. Text is only read if the PDF stores it as outlines; a white page-sized
+  background rectangle is ignored.
+- Files are checked while reading: shapes with impossible coordinates are dropped, so a damaged file gives a clear message
+  instead of a crash.
+
+![DXF import](docs/images/dxf-import.png)
+
+Try `examples/sample-bracket.dxf` (a plate with four holes, a slot and an engraved mark on separate layers).
+
 - **Size and position:** scale the artwork (with **Lock** the proportions stay) and move it.
 - **Burn:** *Lines* burns the outlines (cutting, scoring), *Fill* hatches the closed shapes (engraving areas, with a line
   distance and angle), *Lines and fill* does both. Choose speed, power and passes — or pick a **Material…** from the database.
@@ -181,9 +200,12 @@ type `{n}` for a serial number (`{n:3}` gives 001, 002 …), `{date}` or `{time}
 ![Trace](docs/images/trace-image.png)
 
 *Outline* follows the edges of dark areas; *Centerline* draws one line through the middle of thin strokes (handwriting,
-line art). **Threshold** decides what counts as dark, **Smoothing** rounds corners, **Ignore specks** removes dust and
-**Simplify** reduces the number of points. LaserCraft traces with its own algorithm (contours with simplification and
-rounding, centerline by thinning); the result is made of short straight lines, not Bézier curves.
+line art). **Threshold** decides what counts as dark and **Ignore specks** removes dust. With **Smooth curves (Bézier fitting)**
+(on by default) LaserCraft fits cubic Bézier curves through the outline: round shapes become really round, the job has far fewer
+lines, and corners stay sharp. **Curve error** is how far a curve may stay from the pixels (higher = smoother, fewer points) and
+**Corner angle** is the turn from which a point counts as a corner. Switch the option off to get the old method (stairs rounded
+by *Smoothing* and reduced by *Simplify*). The tracer is LaserCraft's own implementation (contour following, corner detection and
+Schneider curve fitting), not a port of Potrace; the fitted curves are written to the job as short, evenly accurate line segments.
 
 ## 6. Position the work
 
@@ -193,6 +215,26 @@ shown under the X / Y read-out while you move the mouse over the preview. Joggin
 Use the **jog pad**: the arrows move the head by the **step** (right slider, 0.1 – 100 mm) at the **speed** (left slider).
 The house button goes to the work origin (X0 Y0). The small arrows move the Z axis (if your machine has one).
 Jogging works while the machine is **Idle**.
+
+**Keyboard and continuous jogging.** With the main window active and no text field being edited the keyboard moves the head:
+
+| Key | Action |
+|---|---|
+| **←  →  ↑  ↓** | Jog by one step |
+| **⌥ + arrow** | Big step (10 × the jog step) |
+| **⇞ / ⇟** (Page up / down) | Z axis up / down |
+| **+ / −** | Larger / smaller jog step |
+| **]  /  [** | Faster / slower jog speed |
+| **⌃↑ / ⌃↓** | Power override +10 % / −10 % |
+| **⌃1 … ⌃9** | Run the custom button with that number (safety check applies) |
+
+*Settings → Keyboard* lists every action with its key. Click a key, press the new combination (**Esc** cancels, **⌫** clears it);
+if the combination is already used LaserCraft says so and offers to **Replace** it. *Restore Default Shortcuts* resets all of them.
+The diagonal directions have no key by default. Switch on **Hold a key or pad button to keep moving** and the head moves for as long
+as a key or pad button is held and stops the moment it is released (Grbl 1.1; the head is fed in short pieces, so it never runs
+past the machine limits). That is handy together with the camera.
+
+![Keyboard settings](docs/images/settings-keyboard.png)
 
 | Button | What it does |
 |---|---|
@@ -226,7 +268,11 @@ Jogging works while the machine is **Idle**.
    - **Pause** (feed hold) stops the movement; the same button becomes **Resume**.
    - **Stop** removes the rest of the job, holds the machine and resets Grbl so the laser turns off. The position is kept.
    - Click **S**, **G1** or **G0** in the status bar to change power, speed or rapid speed **during** the job (Grbl 1.1).
-4. When the job ends you hear a sound and get a macOS notification. Header and footer lines (Settings → Job) are sent
+4. **Save G-code…** (**⌘S**) asks what to write: header and footer on or off, the number of passes, and the line endings (**LF** for macOS
+   and Linux, **CRLF** for Windows programs). The choice is remembered.
+
+   ![Save options](docs/images/save-options.png)
+5. When the job ends you hear a sound and get a macOS notification. Header and footer lines (Settings → Job) are sent
    before and after your G-code; with several **passes** the job is repeated.
 
 **Warnings before the start.** When the machine's settings are known, LaserCraft compares the job with the machine and lists
@@ -258,6 +304,16 @@ never cut short.
 **Auto-reconnect.** With *Settings → Connection → Reconnect automatically…* LaserCraft tries to reconnect when the USB connection
 drops while no job is running. A running job is always stopped for safety and you get an alert instead.
 
+**Emergency Stop.** The red **Emergency Stop** button next to *Pause* and *Stop* (also **Machine → Emergency Stop**, **⌥⌘.**) is
+always there when the machine is connected. It needs no confirmation and works in every state — during a job, a jog or when
+idle: it cancels any jog, stops the motion, resets Grbl (which switches the laser off), ends a running job as *stopped* and sends
+`M5` afterwards. Use it whenever something looks wrong; afterwards check the machine, press **Unlock** or **Home** if needed.
+The emergency stop is a software function: it does not replace the power switch or a hardware emergency stop of your machine.
+
+**Buffer watchdog.** If an "ok" from Grbl gets lost (noise on the cable, a USB hiccup) a job could wait for ever. When Grbl reports an
+empty receive buffer for three seconds while LaserCraft still counts unanswered lines, the counters are set right again, the
+console says *Buffer out of sync …* and the job carries on.
+
 **Reset** (circular arrow, **⇧⌘R**) is a soft reset of the controller when no job is running.
 
 **Your Mac stays awake while a job is running.** From the moment the job starts until it ends (finished, stopped or failed)
@@ -283,7 +339,25 @@ editor. In the layout you combine several objects — pictures, SVG files, texts
 - **Layers** run from top to bottom: put engraving first and cutting last, so the cut-out piece does not move while the
   engraving is burnt. Each layer has a colour, a mode (*Lines*, *Fill*, *Lines and fill*), speed, power and passes; it can be
   hidden or switched off for the burn, moved up and down.
-- **Undo / redo** (**⌘Z** / **⇧⌘Z**) cover every change, also whole drags.
+- **Pause before a layer:** switch on *Pause before this layer* and type a message (for example "Flip the material"). The job
+  stops there with the laser off and shows the message; **Resume** continues. Good for turning a piece over, changing the
+  material or checking the result between engraving and cutting. (The pause is the G-code `M0`.)
+- **Lower focus per pass:** for layers with several passes, a value in mm moves the Z axis down by that much with every further
+  pass (cutting thick wood). It needs a machine with a Z axis; Z0 must be the focus you set before the job, and the job returns
+  to Z0 at the end. 0 = no Z movement (the default).
+
+![Layer with pause and focus step](docs/images/layout-pause-focus.png)
+- **Zoom and pan:** pinch on the trackpad (or **⌘ + scroll**, or **⌘+ / ⌘−**) zooms around the pointer, two-finger scrolling moves the
+  view, **Space + drag** pans, **⌘0** fits the work area. The percentage and the zoom buttons are in the toolbar.
+- **Turning:** every object — pictures too — has a **turning handle** (the small circle above it). Drag it to turn by any angle; it
+  snaps every 15° (hold **⌥** to turn freely). The *Rotation* field in the inspector takes exact angles. A turned picture is
+  resampled when the job is made; the white corners of the new sheet are not engraved.
+- **Several objects:** **Shift-click** adds or removes an object from the selection, **⌘A** selects all; the selection moves, copies
+  and is deleted together. **Arrange → Align** lines objects up (left, centre, right, top, middle, bottom — a single object is
+  aligned with the work area), **Arrange → Distribute** spaces three or more objects evenly.
+- **Array:** *Arrange → Array…* makes rows × columns of copies with a gap in mm. If the selected text contains `{n}` every copy gets
+  its own consecutive number (from the number you choose) — serial numbers for a batch in one step.
+- **Undo / redo** (**⌘Z** / **⇧⌘Z**) cover every change, also whole drags, arrays and arranging.
 - **Use as Job** (or simply **Start**) makes the G-code from the layout when it is needed. If you change the layout afterwards,
   the job is made again before the next start.
 
@@ -305,6 +379,7 @@ profile in a folder `Name.lasercraft`; *Open Project…* (**⇧⌘O**) or a doub
 | **Cutting test** | Squares cut with several speeds and numbers of passes. The ones that fall out cut through. The **kerf** calculator tells how wide the beam is (nominal size minus measured piece) and how far to offset the cut. |
 | **Shake test** | Short back-and-forth lines at growing feed rates with weak power. Enter the highest clean feed to get a first guess for `$120` / `$121`. |
 | **Line distance and focus** | Blocks with a decreasing line distance: the finest block with separate lines is your usable resolution. |
+| **Scan offset** | Nine blocks engraved in both directions with offsets from −0.4 to +0.4 mm. Use the speed of your real engravings; the block with the straightest edges shows the value for *Scan offset* in the picture import. |
 | **Calibration square** | A square of 100 mm (or another size). Measure it, enter the result, and LaserCraft calculates new steps per mm for `$100` / `$101` — **Write to the machine** sends them. |
 
 ### Materials
@@ -342,6 +417,14 @@ other controllers use the standard Grbl texts.
 
 ![Network machines](docs/images/network-machines.png)
 
+### Job history
+
+*Tools → Job History…* lists the last 40 jobs with a small picture, date, duration, machine, number of lines and the result
+(finished, stopped, failed). A copy of the G-code is kept, so **Open Again** (or a double-click) loads the job even when the file
+has moved or the job came from the layout editor. The history is recorded for every job, including the demo machine.
+
+![Job history](docs/images/job-history.png)
+
 ### Camera
 
 *Tools → Camera* opens a window with the picture of a USB camera or a nearby iPhone (Continuity Camera). **Take Picture**
@@ -366,12 +449,28 @@ start to the end of every job. macOS asks for permission to use the camera the f
 The volume and each group (sounds, notifications, alerts) can be changed in **Settings → General**. The safety check can not.
 macOS asks for permission to show notifications when you start your first job.
 
+**Progress in the Dock.** While a job runs the Dock icon shows a progress bar and the percentage with the remaining time
+("63% · 12 min").
+
+**Push message to your iPhone.** *Settings → General → Remote Notification* sends a message when a job ends: enter an
+[ntfy](https://ntfy.sh) topic (`ntfy://my-secret-topic`; install the ntfy app on the iPhone and subscribe to the same topic) or the
+address of any webhook that accepts JSON. *Only for jobs longer than … minutes* keeps short jobs quiet. The file name is **not**
+sent unless you switch on *Include the file name*. *Send Test Message* checks the setup. Anyone who knows an ntfy topic name can
+read its messages, so choose a long, secret name.
+
+![Remote notification](docs/images/settings-remote.png)
+
 ## 9. Console and G-code list
 
 The **save** button in the console saves everything as a text file (**Machine → Save Console Log…**). **Machine → Copy Diagnostic
 Report** copies versions, the machine's `$$` settings, job state and the last 200 console lines — paste it into a bug report.
 
 Switch between **G-code** and **Console** above the list.
+
+![Console with filter](docs/images/console-filter.png)
+
+In the console the **Filter** menu shows or hides *Sent*, *Received*, *Messages* and *Errors* (*Errors Only* is one click),
+the search field keeps only lines containing your text, and *Show Timestamps* and *Auto-Scroll* can be switched on and off.
 
 - **G-code:** every line of the job. ✓ = accepted by Grbl, ✕ = Grbl reported an error, dot = waiting.
 - **Console:** commands you sent (`>`), answers from the machine (`<`), and messages from the app. Errors and alarms are
@@ -434,7 +533,7 @@ points you to the download page.
 
 ## 13. Languages and appearance
 
-- **Language:** *Settings → General → Language* — System, English, Deutsch, Français, Español, Italiano or Português (Brasil). Grbl's own error, alarm and setting texts are available in English, Deutsch and Français (other languages show them in English). The change is applied after a restart
+- **Language:** *Settings → General → Language* — System, English, Deutsch, Français, Español, Italiano, Português (Brasil), Nederlands or Polski. Nederlands and Polski cover the interface (about 80 % of the texts: menus, buttons, labels, messages); longer explanations still appear in English. Grbl's own error, alarm and setting texts are available in English, Deutsch and Français (other languages show them in English). The change is applied after a restart
   (a **Restart Now** button appears). *System* follows the order of languages in macOS System Settings.
 - **Appearance:** *System*, *Light* or *Dark*, applied immediately. In dark appearance the preview stays a white sheet unless you
   turn on *Use a dark sheet in Dark appearance* in *Settings → Preview*.
@@ -447,10 +546,11 @@ points you to the download page.
 | ⌘O | Open G-code… |
 | ⌘I | Import Image… |
 | ⌘S | Save G-code… |
+| ⌥⌘. | Emergency Stop |
 | ⌥⌘S | Save Project… |
 | ⇧⌘O | Open Project… |
 | ⌘N | New Project |
-| ⇧⌘I | Import SVG… |
+| ⇧⌘I | Import Vector File… (SVG, DXF, PDF) |
 | ⌘Z / ⇧⌘Z | Undo / Redo (in the layout editor) |
 | ⌘K | Connect / Disconnect |
 | ⌘R | Start job (shows the safety check) |
@@ -470,6 +570,7 @@ the **Job** menu contains *Start*, *Pause / Resume*, *Resume Job from Line…* a
 | No port in the list | Check the cable (some are charge-only), switch the laser on, press *Refresh Ports*, install the USB-chip driver (CH340 / CP210x). |
 | "Connection failed" / timeout | Wrong baud rate (try 115200, then 9600 / 250000), port used by another program (close other laser software), unplug and replug. |
 | Status stays **Alarm** | Press **Unlock**; run **Home** if the machine has limit switches. The alert says what caused the alarm. |
+| `error: Bad number format` (with text instead of a number) | Grbl 0.9 and older answer with text. LaserCraft maps the text to the usual error number and explains it; jogging then uses G91 moves instead of `$J=`. |
 | `error:9` G-code locked | The machine is in alarm or jogging — unlock first. |
 | `error:20` / `error:2` … in a job | Grbl does not understand a line. The ✕ in the G-code list shows which. Check that the file is for Grbl. |
 | Laser does not fire | Laser mode (`$32=1`), maximum value (`$30`) and the S values in the job must match; the G-code needs M3 / M4. |

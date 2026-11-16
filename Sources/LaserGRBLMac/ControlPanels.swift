@@ -152,8 +152,13 @@ struct CommandList: View {
     @EnvironmentObject var app: AppModel
     @ObservedObject var controller: GrblController
     private enum Mode: String { case program, messages }
-    @State private var mode: Mode = .program
+    @State private var mode: Mode
     @State private var lastScroll = Date.distantPast
+
+    init(controller: GrblController, showConsole: Bool = false) {
+        _controller = ObservedObject(wrappedValue: controller)
+        _mode = State(initialValue: showConsole ? .messages : .program)
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -218,12 +223,19 @@ struct CommandList: View {
         }
     }
 
+    private static let clock: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "HH:mm:ss.SSS"; return f
+    }()
+
     private var messageList: some View {
+        let lines = app.consoleFilter.apply(controller.console)
+        return VStack(spacing: 0) {
+            ConsoleFilterBar(controller: controller)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(controller.console) { line in
-                        Text(prefix(line) + line.text)
+                    ForEach(lines) { line in
+                        Text((app.consoleTimestamps ? CommandList.clock.string(from: line.date) + "  " : "") + prefix(line) + line.text)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(color(line))
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -234,17 +246,9 @@ struct CommandList: View {
                 .padding(6)
             }
             .onChange(of: controller.console.count) {
-                if let last = controller.console.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                if app.consoleAutoScroll, let last = lines.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
-        .overlay(alignment: .topTrailing) {
-            HStack(spacing: 6) {
-                Button { app.saveConsoleLog() } label: { IconLabel("Save Console Log…", icon: "save", size: 11) }
-                    .help("Save the console as a text file")
-                Button { controller.clearConsole() } label: { IconLabel("Clear Console", icon: "trash", size: 11) }
-                    .help("Clear the console")
-            }
-            .labelStyle(.iconOnly).buttonStyle(.borderless).padding(4)
         }
     }
 
@@ -281,8 +285,8 @@ struct JogPanel: View {
             VStack(spacing: 6) {
                 pad
                 HStack(spacing: 6) {
-                    Button { jog(.zUp) } label: { IconLabel("Z up", icon: "up", size: 11) }.help("Z axis up")
-                    Button { jog(.zDown) } label: { IconLabel("Z down", icon: "down", size: 11) }.help("Z axis down")
+                    JogHoldButton(direction: .zUp, step: { jog(.zUp) }) { IconLabel("Z up", icon: "up", size: 11) }.help("Z axis up")
+                    JogHoldButton(direction: .zDown, step: { jog(.zDown) }) { IconLabel("Z down", icon: "down", size: 11) }.help("Z axis down")
                 }
                 .labelStyle(.iconOnly).controlSize(.small)
             }
@@ -315,7 +319,7 @@ struct JogPanel: View {
     }
 
     private func arrow(_ d: JogDirection, _ icon: String, _ rotation: Double, _ help: LocalizedStringKey) -> some View {
-        Button { jog(d) } label: { UIcon(name: icon, size: 15, rotation: rotation).frame(width: 34, height: 26) }
+        JogHoldButton(direction: d, step: { jog(d) }) { UIcon(name: icon, size: 15, rotation: rotation).frame(width: 34, height: 26) }
             .help(help)
             .accessibilityLabel(Text(help))
     }
@@ -344,6 +348,7 @@ struct ActionRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
+                EmergencyStopButton(controller: controller).labelStyle(.titleAndIcon)
                 if controller.state == .hold || controller.state == .autoHold || controller.state == .cooling {
                     Button { controller.resume() } label: { IconLabel("Resume", icon: "play", size: 15) }
                         .help("Resume after a pause")

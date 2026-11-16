@@ -180,6 +180,11 @@ struct ImageImportView: View {
                         Slider(value: $maxPowerPercent, in: 1...100, step: 1)
                         Text("\(Int(maxPowerPercent))%").monospacedDigit().frame(width: 38, alignment: .trailing)
                     }
+                    if !options.unidirectional && options.direction != .diagonal {
+                        UnitRow("Scan offset", value: Binding(get: { options.scanOffsetMM ?? 0 }, set: { options.scanOffsetMM = $0 == 0 ? nil : $0 }),
+                                range: -2...2, unit: "mm", digits: 3)
+                            .help("Shifts the lines that run backwards. Find the value with Tools → Test Patterns → Scan offset.")
+                    }
                     Picker("Laser mode", selection: $options.laserOn) {
                         Text("M3 constant power").tag("M3")
                         Text("M4 dynamic power").tag("M4")

@@ -43,6 +43,18 @@ final class AppModel: ObservableObject {
     @Published var preview = PreviewModel()
     // layout, tools, materials, profiles
     let layout = LayoutModel()
+    // keyboard, console, history, Dock
+    @Published var hotkeys = AppModel.loadHotkeys()
+    @Published var consoleFilter = ConsoleFilter()
+    @Published var consoleTimestamps = UserDefaults.standard.bool(forKey: "consoleTimestamps") {
+        didSet { UserDefaults.standard.set(consoleTimestamps, forKey: "consoleTimestamps") }
+    }
+    @Published var consoleAutoScroll = UserDefaults.standard.object(forKey: "consoleAutoScroll") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(consoleAutoScroll, forKey: "consoleAutoScroll") }
+    }
+    let history = JobHistoryStore(directory: AppModel.supportDirectory.appendingPathComponent("history", isDirectory: true))
+    let dock = DockProgress()
+    var progressTimer: Timer?
     @Published var mainMode: MainMode = .job
     @Published var tool: ToolSheet?
     /// True when the loaded job was generated from the layout (it is made again before a start if the layout changed).
@@ -148,6 +160,7 @@ final class AppModel: ObservableObject {
 
     /// `silent`: the automatic check at launch only speaks up when there is something new.
     func checkForUpdates(silent: Bool) {
+        if AutoUpdater.shared.isEnabled { if !silent { AutoUpdater.shared.checkForUpdates() }; return }
         UpdateChecker.check(current: currentVersion) { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -167,6 +180,7 @@ final class AppModel: ObservableObject {
     }
 
     private func autoCheckForUpdates() {
+        guard !AutoUpdater.shared.isEnabled else { return }          // Sparkle checks by itself
         let d = UserDefaults.standard
         guard d.object(forKey: "autoUpdateCheck") as? Bool ?? true, Notifier.isAvailable else { return }
         let last = d.object(forKey: "lastUpdateCheck") as? Date ?? .distantPast
@@ -303,6 +317,7 @@ final class AppModel: ObservableObject {
         if let f = d.string(forKey: "footer") { controller.jobSettings.footer = f }
         refreshPorts()
         applyAppearance()
+        HotkeyManager.shared.install(app: self)
         controller.onEvent = { [weak self] event in self?.handle(event) }
         observeSleep()
         applyCoolingPrefs()
@@ -346,7 +361,7 @@ final class AppModel: ObservableObject {
 
     /// Buttons saved by an earlier version carry their title in whatever language was active then
     /// (for example French). Recognise the built-in ones and make them follow the app language again.
-    static func migrated(_ buttons: [CustomButton], languages: [Bundle] = ["en", "de", "fr", "es", "it", "pt-BR"].compactMap { lang -> Bundle? in
+    static func migrated(_ buttons: [CustomButton], languages: [Bundle] = ["en", "de", "fr", "es", "it", "pt-BR", "nl", "pl"].compactMap { lang -> Bundle? in
         Bundle.main.path(forResource: lang, ofType: "lproj").flatMap { Bundle(path: $0) }
     }) -> [CustomButton] {
         let defaults = defaultButtons()
@@ -429,7 +444,7 @@ final class AppModel: ObservableObject {
         let ext = url.pathExtension.lowercased()
         if ["png", "jpg", "jpeg", "bmp", "tif", "tiff", "gif", "heic"].contains(ext) {
             importURL = url; showImageImport = true
-        } else if ext == "svg" {
+        } else if VectorFileKind.extensions.contains(ext) {
             tool = .vector(.svg(url))
         } else if ext == ProjectIO.fileExtension {
             openProject(url)
@@ -462,11 +477,14 @@ final class AppModel: ObservableObject {
         guard let p = controller.program else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = (p.name as NSString).deletingPathExtension + ".nc"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
         let js = controller.jobSettings
-        var out = js.header + "\n"
-        for _ in 0..<max(1, js.passes) { out += p.text + "\n" }
-        out += js.footer + "\n"
+        let model = SaveOptionsModel(passes: js.passes)
+        let hosting = NSHostingView(rootView: SaveOptionsView(model: model, hasHeader: !js.header.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                                              hasFooter: !js.footer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+        hosting.frame = NSRect(origin: .zero, size: hosting.fittingSize)
+        panel.accessoryView = hosting
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let out = GCodeExporter.text(program: p, header: js.header, footer: js.footer, options: model.options)
         do { try out.write(to: url, atomically: true, encoding: .utf8) }
         catch { alertMessage = L("Could not save: %@", error.localizedDescription) }
     }
@@ -594,7 +612,12 @@ final class AppModel: ObservableObject {
             Sounds.play(.go)
         case .coolingEnded:
             Sounds.play(.started)
+        case .bufferResynced:
+            Sounds.play(.error)          // the console explains what happened; the job carries on
+        case .emergencyStopped:
+            Sounds.play(.alarm)
         case .jobStarted:
+            startDockProgress()
             CameraModel.shared.jobStarted(name: controller.program?.name ?? "job")
             beginStayAwake()
             jobErrorAlerted = false
@@ -633,6 +656,9 @@ final class AppModel: ObservableObject {
             endStayAwake()   // the Mac may sleep again, whatever the outcome
             CameraModel.shared.jobEnded()
             recordUsage(aborted: aborted, errors: errors, seconds: seconds, name: name)
+            recordHistory(aborted: aborted, errors: errors, seconds: seconds, name: name)
+            stopDockProgress()
+            sendRemoteNotification(name: name, seconds: seconds, aborted: aborted, errors: errors)
             if aborted {
                 // remember where it stopped so it can be continued later
                 if let p = controller.program, controller.jobExecuted > 0 {

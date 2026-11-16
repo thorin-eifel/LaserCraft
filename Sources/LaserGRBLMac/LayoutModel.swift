@@ -5,11 +5,24 @@ import LaserGRBLCore
 /// The editable layout: objects on layers, with undo and redo. G-code is made from it only when needed.
 final class LayoutModel: ObservableObject {
     @Published private(set) var doc = LayoutDocument()
-    @Published var selection: String?
+    @Published var selection: String? {
+        didSet { if selection == nil { extraSelection = [] } else { extraSelection.remove(selection!) } }
+    }
+    /// More selected objects besides `selection` (shift-click): they move, align and are deleted together.
+    @Published var extraSelection: Set<String> = []
     @Published private(set) var fileURL: URL?
     @Published private(set) var dirty = false
     /// Bumped by every change; the job is regenerated when it differs from `generatedAt`.
     @Published private(set) var revision = 0
+    /// Which part of the work area is shown, and how big the canvas is (set by the canvas).
+    @Published var viewport = LayoutViewport()
+    var viewSize = CGSize(width: 600, height: 400)
+    var viewArea: (Double, Double) = (300, 200)
+
+    func zoom(by factor: Double) {
+        let centre = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+        viewport.zoom(by: factor, around: centre, area: viewArea, size: viewSize)
+    }
     private(set) var generatedAt = -1
     var header = "", footer = ""
 
@@ -23,6 +36,23 @@ final class LayoutModel: ObservableObject {
     var canRedo: Bool { !redoStack.isEmpty }
     var needsGenerate: Bool { !doc.isEmpty && revision != generatedAt }
     var selected: LayoutObject? { doc.objects.first { $0.id == selection } }
+    /// Everything that is selected, in document order.
+    var selectedIDs: [String] { doc.objects.map { $0.id }.filter { $0 == selection || extraSelection.contains($0) } }
+    var selectedObjects: [LayoutObject] { doc.objects.filter { $0.id == selection || extraSelection.contains($0.id) } }
+
+    /// Click selects one object; shift-click adds or removes one.
+    func select(_ id: String?, additive: Bool = false) {
+        guard additive, let id = id else { extraSelection = []; selection = id; return }
+        if selection == nil { selection = id }
+        else if id == selection { selection = extraSelection.sorted().first; if let n = selection { extraSelection.remove(n) } }
+        else if extraSelection.contains(id) { extraSelection.remove(id) }
+        else { extraSelection.insert(id) }
+    }
+
+    func selectAll() {
+        selection = doc.objects.first?.id
+        extraSelection = Set(doc.objects.dropFirst().map { $0.id })
+    }
 
     // MARK: changing the document
 
@@ -136,20 +166,83 @@ final class LayoutModel: ObservableObject {
     // MARK: editing the selection
 
     func deleteSelection() {
-        guard let id = selection else { return }
-        mutate { $0.objects.removeAll { $0.id == id } }
+        let ids = Set(selectedIDs)
+        guard !ids.isEmpty else { return }
+        mutate { $0.objects.removeAll { ids.contains($0.id) } }
         selection = nil
     }
 
-    func duplicateSelection() {
-        guard var o = selected else { return }
-        o.id = UUID().uuidString; o.x += 5; o.y -= 5; o.name += " copy"
-        if case .image(let id, let opts) = o.kind, let d = images[id] {
-            let nid = UUID().uuidString
-            images[nid] = d; cgCache[nid] = cgCache[id]
-            o.kind = .image(imageID: nid, options: opts)
+    /// Moves every selected object by the same amount (a drag): the first call of an interaction is one undo step.
+    func moveSelected(by dx: Double, _ dy: Double, from start: [String: Pt]) {
+        let ids = Set(selectedIDs)
+        interact { d in
+            for i in d.objects.indices where ids.contains(d.objects[i].id) && !d.objects[i].locked {
+                if let o = start[d.objects[i].id] { d.objects[i].x = o.x + dx; d.objects[i].y = o.y + dy }
+            }
         }
-        add(o)
+    }
+
+    // MARK: arrange
+
+    /// Moves objects by the given offsets (one undo step).
+    func apply(offsets: [String: Pt]) {
+        guard !offsets.isEmpty else { return }
+        mutate { d in
+            for i in d.objects.indices {
+                if let o = offsets[d.objects[i].id], !d.objects[i].locked { d.objects[i].x += o.x; d.objects[i].y += o.y }
+            }
+        }
+    }
+
+    /// Lines the selected objects up with each other, or — for a single object — with the work area.
+    func align(_ edge: AlignEdge, workArea: (Double, Double)) {
+        let ids = selectedIDs
+        var area: Bounds? = nil
+        if ids.count == 1 { var b = Bounds(); b.add(0, 0); b.add(workArea.0, workArea.1); area = b }
+        apply(offsets: doc.alignOffsets(ids: ids, edge: edge, within: area))
+    }
+
+    func distribute(_ axis: DistributeAxis) { apply(offsets: doc.distributeOffsets(ids: selectedIDs, axis: axis)) }
+
+    /// `rows × columns` copies of the selected object (pictures get their own copy of the picture data).
+    @discardableResult
+    func makeArray(rows: Int, columns: Int, gapX: Double, gapY: Double, numberFrom: Int?) -> Int {
+        guard let id = selection else { return 0 }
+        let all = doc.arrayObjects(of: id, rows: rows, columns: columns, gapX: gapX, gapY: gapY, numberFrom: numberFrom)
+        guard all.count > 1 else { return 0 }
+        var copies = Array(all.dropFirst())
+        for i in copies.indices {
+            if case .image(let imgID, let opts) = copies[i].kind, let data = images[imgID] {
+                let nid = UUID().uuidString
+                images[nid] = data; cgCache[nid] = cgCache[imgID]
+                copies[i].kind = .image(imageID: nid, options: opts)
+            }
+        }
+        mutate { d in
+            if let first = all.first, let i = d.objects.firstIndex(where: { $0.id == id }) { d.objects[i] = first }   // numbered original
+            d.objects += copies
+        }
+        selection = id
+        extraSelection = Set(copies.map { $0.id })
+        return copies.count
+    }
+
+    func duplicateSelection() {
+        let originals = selectedObjects
+        guard !originals.isEmpty else { return }
+        var copies: [LayoutObject] = []
+        for var o in originals {
+            o.id = UUID().uuidString; o.x += 5; o.y -= 5; o.name += " copy"
+            if case .image(let id, let opts) = o.kind, let d = images[id] {
+                let nid = UUID().uuidString
+                images[nid] = d; cgCache[nid] = cgCache[id]
+                o.kind = .image(imageID: nid, options: opts)
+            }
+            copies.append(o)
+        }
+        mutate { $0.objects += copies }
+        selection = copies.first?.id
+        extraSelection = Set(copies.dropFirst().map { $0.id })
     }
 
     func centerSelection(inWidth w: Double, height h: Double) {
@@ -186,17 +279,12 @@ final class LayoutModel: ObservableObject {
         }
     }
 
-    /// Moves the picture that is selected by 90°; other objects turn freely.
+    /// Turns the selected object counter-clockwise by `degrees` (any angle; pictures too).
     func rotateSelected(by degrees: Double) {
-        guard let o = selected else { return }
-        if case .image(let id, var opts) = o.kind {
-            opts.rotation = (opts.rotation + (degrees > 0 ? 270 : 90)) % 360   // RasterOptions turns clockwise
-            updateSelected { o2 in
-                o2.kind = .image(imageID: id, options: opts)
-                if (Int(degrees) / 90) % 2 != 0 { swap(&o2.width, &o2.height) }
-            }
-        } else {
-            updateSelected { $0.rotation = ($0.rotation + degrees).truncatingRemainder(dividingBy: 360) }
+        updateSelected { o in
+            var r = (o.rotation + degrees).truncatingRemainder(dividingBy: 360)
+            if r < 0 { r += 360 }
+            o.rotation = (r * 100).rounded() / 100
         }
     }
 

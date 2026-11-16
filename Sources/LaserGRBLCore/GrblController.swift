@@ -30,6 +30,10 @@ public enum ControllerEvent {
     /// The automatic cooling pause began / ended.
     case coolingStarted(seconds: Double)
     case coolingEnded
+    /// The counters for lines on their way to Grbl did not match what Grbl reports; they were set right again.
+    case bufferResynced(lines: Int)
+    /// The emergency stop was used.
+    case emergencyStopped
 }
 
 public struct JobSettings: Equatable {
@@ -95,6 +99,16 @@ public final class GrblController: ObservableObject {
     private var lastTickDate: Date?
     private var runAccumulated: TimeInterval = 0
     private var coolingEndsAt: Date?
+    private var stuckSince: Date?
+
+    /// How long Grbl must report an empty receive buffer while lines are still counted as unanswered
+    /// before the counters are set right again.
+    public var bufferStuckSeconds: Double = 3
+    /// How often the counters had to be corrected since connecting.
+    @Published public private(set) var bufferResyncs = 0
+    /// While a key or button is held: the head keeps moving until `endContinuousJog`.
+    @Published public private(set) var continuousJog: (direction: JogDirection, feed: Double)?
+    public var isContinuousJogging: Bool { continuousJog != nil }
 
     // Automatic cooling: pause the job regularly so a diode laser can cool down.
     public var coolingEnabled = false
@@ -234,6 +248,7 @@ public final class GrblController: ObservableObject {
     }
 
     private func resetStreams() {
+        continuousJog = nil; stuckSince = nil
         rxBuffer.removeAll()
         manualQueue.removeAll(); jobQueue.removeAll(); pending.removeAll()
         usedBuffer = 0
@@ -257,6 +272,7 @@ public final class GrblController: ObservableObject {
         }
         sendRealtime(0x3F, quiet: true)   // "?"
         manageCooling()
+        manageContinuousJog()
         pump()
     }
 
@@ -445,6 +461,7 @@ public final class GrblController: ObservableObject {
             manageOverrides()
         }
         buffer = r.buffer ?? buffer
+        watchBuffer(r)
         if let f = r.feed { currentFeed = f }
         if let s = r.spindle { currentSpindle = s }
     }
@@ -619,7 +636,93 @@ public final class GrblController: ObservableObject {
         }
     }
 
-    public func cancelJog() { sendRealtime(0x85) }
+    public func cancelJog() { continuousJog = nil; sendRealtime(0x85) }
+
+    // MARK: continuous jogging
+
+    /// Starts moving in a direction until `endContinuousJog` (holding a pad button or a key). Grbl 1.1 only; older
+    /// versions make a single step. The motion is sent in short pieces so that nothing runs past the machine limits.
+    public func beginContinuousJog(_ dir: JogDirection, feed: Double) {
+        guard isConnected, state == .idle || state == .jog, dir != .home else { return }
+        guard supportsTrueJogging else { jog(dir, step: 1, feed: feed); return }
+        continuousJog = (dir, feed)
+        manageContinuousJog()
+    }
+
+    /// Stops the motion at once (jog cancel, 0x85) and forgets the queued pieces.
+    public func endContinuousJog() {
+        guard continuousJog != nil else { return }
+        continuousJog = nil
+        manualQueue.removeAll { $0.hasPrefix("$J=") }
+        sendRealtime(0x85)
+    }
+
+    /// Keeps two short jog pieces in front of the machine while the key is held.
+    func manageContinuousJog() {
+        guard let (dir, feed) = continuousJog else { return }
+        guard isConnected, !jobRunning, state == .idle || state == .jog else { continuousJog = nil; return }
+        let inFlight = pending.filter { !$0.isJob && $0.line.hasPrefix("$J=") }.count + manualQueue.filter { $0.hasPrefix("$J=") }.count
+        guard inFlight < 2 else { return }
+        let piece = min(25, max(1, feed / 120))              // about half a second of motion
+        let s = String(format: "%.2f", piece)
+        let axes: String
+        switch dir {
+        case .n: axes = "Y\(s)"
+        case .ne: axes = "X\(s)Y\(s)"
+        case .e: axes = "X\(s)"
+        case .se: axes = "X\(s)Y-\(s)"
+        case .s: axes = "Y-\(s)"
+        case .sw: axes = "X-\(s)Y-\(s)"
+        case .w: axes = "X-\(s)"
+        case .nw: axes = "X-\(s)Y\(s)"
+        case .zUp: axes = "Z\(s)"
+        case .zDown: axes = "Z-\(s)"
+        case .home: return
+        }
+        send("$J=G91\(axes)F\(Int(feed))")
+    }
+
+    // MARK: emergency stop
+
+    /// Stops everything at once, whatever the machine is doing: no confirmation, laser off.
+    /// A running job is ended as stopped; the machine is reset and switched to M5 afterwards.
+    public func emergencyStop() {
+        guard port != nil else { return }
+        continuousJog = nil
+        manualQueue.removeAll(); jobQueue.removeAll()
+        if jobRunning { finishJob(aborted: true) }
+        pending.removeAll(); usedBuffer = 0
+        sendRealtime(0x85, quiet: true)           // cancel a jog
+        sendRealtime(0x21, quiet: true)           // stop the motion
+        sendRealtime(0x18)                        // soft reset: Grbl switches the laser off
+        log(L("Emergency stop"), .error)
+        onEvent?(.emergencyStopped)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self, self.isConnected else { return }
+            self.send("M5 S0")
+        }
+    }
+
+    // MARK: buffer watchdog
+
+    /// Grbl says its receive buffer is empty, but lines are still counted as on their way for seconds:
+    /// an "ok" went missing (noise on the cable, a USB hiccup). Without a fix the job would wait forever.
+    private func watchBuffer(_ r: StatusReport) {
+        guard let b = r.buffer, !pending.isEmpty, b.bytes >= bufferSize,
+              (state == .idle || state == .run || state == .jog),
+              !pending.contains(where: { $0.line.hasPrefix("$") && !$0.line.hasPrefix("$J=") }) else { stuckSince = nil; return }
+        let now = Date()
+        guard let since = stuckSince else { stuckSince = now; return }
+        guard now.timeIntervalSince(since) >= bufferStuckSeconds else { return }
+        stuckSince = nil
+        let n = pending.count
+        log(L("Buffer out of sync: %d lines counted as unanswered were released", n), .error)
+        bufferResyncs += 1
+        for _ in 0..<n { completePending(error: nil) }
+        usedBuffer = 0
+        onEvent?(.bufferResynced(lines: n))
+        pump()
+    }
 
     // MARK: overrides
 
@@ -678,6 +781,9 @@ public final class GrblController: ObservableObject {
     // MARK: log
 
     public func clearConsole() { console.removeAll() }
+
+    /// A note from the app itself (for example a failed push message).
+    public func noteExternal(_ text: String) { log(text, .error) }
 
     private func log(_ text: String, _ kind: ConsoleLine.Kind) {
         logCounter += 1

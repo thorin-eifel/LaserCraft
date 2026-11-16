@@ -45,7 +45,7 @@ struct AppCommands: Commands {
             }
             .disabled(model.recentFiles.isEmpty)
             Divider()
-            Button("Import SVG…") { model.addSVGToLayout() }.keyboardShortcut("i", modifiers: [.command, .shift])
+            Button("Import Vector File…") { model.addSVGToLayout() }.keyboardShortcut("i", modifiers: [.command, .shift])
             Button("Add Text…") { model.tool = .vector(.text) }
             Button("Trace Image…") { model.traceImage() }
             Divider()
@@ -69,15 +69,16 @@ struct AppCommands: Commands {
             Button("Materials…") { model.tool = .materials }
             Divider()
             Button("Machine Profiles…") { model.tool = .profiles }
+            Button("Job History…") { model.tool = .history }
             Button("Laser Statistics…") { model.tool = .statistics }
             Button("Network Machines…") { model.tool = .network }
             Divider()
             Button("Camera") { openWindow(id: "camera") }
         }
         CommandGroup(before: .toolbar) {
-            Button("Zoom In") { model.preview.perform(.zoomIn) }.keyboardShortcut("+")
-            Button("Zoom Out") { model.preview.perform(.zoomOut) }.keyboardShortcut("-")
-            Button("Fit to window") { model.preview.perform(.fit) }.keyboardShortcut("0")
+            Button("Zoom In") { if model.mainMode == .layout { model.layout.zoom(by: 1.25) } else { model.preview.perform(.zoomIn) } }.keyboardShortcut("+")
+            Button("Zoom Out") { if model.mainMode == .layout { model.layout.zoom(by: 0.8) } else { model.preview.perform(.zoomOut) } }.keyboardShortcut("-")
+            Button("Fit to window") { if model.mainMode == .layout { model.layout.viewport.fit() } else { model.preview.perform(.fit) } }.keyboardShortcut("0")
             Divider()
         }
         CommandMenu("Machine") {
@@ -90,6 +91,8 @@ struct AppCommands: Commands {
             Button("Frame") { model.runFrame() }
                 .disabled(controller.program == nil || controller.state != .idle)
             Divider()
+            Button("Emergency Stop") { controller.emergencyStop() }.keyboardShortcut(".", modifiers: [.command, .option])
+                .disabled(!controller.isConnected)
             Button("Soft Reset") { controller.softReset() }.keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(!controller.isConnected)
             Divider()

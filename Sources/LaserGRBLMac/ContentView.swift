@@ -46,6 +46,7 @@ struct ContentView: View {
                 case .profiles: ProfilesSheet()
                 case .statistics: StatisticsSheet()
                 case .network: NetworkSheet()
+                case .history: JobHistorySheet()
                 }
             }.environmentObject(app)
         }

@@ -1,0 +1,58 @@
+name: Hardware report
+description: Tell us which laser, controller and connection you tried LaserCraft with (it works or it does not).
+title: "[Hardware] "
+labels: ["hardware"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! Reports like this fill the "Tested with" table in the README. Test with the laser **off or at low power** first.
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: Brand and model of the laser (and the module / power if it is a diode laser).
+      placeholder: Ortur Laser Master 3, 10 W
+    validations: { required: true }
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware
+      description: What the console shows after connecting (`$I` or the welcome line), for example "Grbl 1.1f", "grblHAL 1.1f", "FluidNC 3.7".
+    validations: { required: true }
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Connection
+      options: [USB serial, WiFi / Telnet, WiFi / WebSocket, TCP bridge, Simulator only]
+    validations: { required: true }
+  - type: input
+    id: baud
+    attributes:
+      label: Baud rate (USB) or address type (network)
+      placeholder: "115200"
+  - type: input
+    id: version
+    attributes:
+      label: LaserCraft version
+      description: LaserCraft → About, or Machine → Copy Diagnostic Report.
+      placeholder: 1.0.0-beta.6
+    validations: { required: true }
+  - type: checkboxes
+    id: worked
+    attributes:
+      label: What worked?
+      options:
+        - label: Connecting and status
+        - label: Jogging, Home, Unlock
+        - label: Running a job to the end
+        - label: Pause / Resume / Stop
+        - label: Overrides (speed, power)
+        - label: Resume from a line
+        - label: Picture import / SVG / text
+        - label: Camera
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything that did not work, odd messages, or tips for other owners of this machine. Paste *Machine → Copy Diagnostic Report* if something failed.

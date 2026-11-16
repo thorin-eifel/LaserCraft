@@ -56,10 +56,17 @@ public enum GrblParser {
     public static func classify(_ rawLine: String) -> GrblMessage {
         let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         if line == "ok" { return .ok }
-        if line.hasPrefix("error:"), let n = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) { return .error(n) }
-        if line.hasPrefix("ALARM:"), let n = Int(line.dropFirst(6).trimmingCharacters(in: .whitespaces)) { return .alarm(n) }
+        // Grbl 1.1 sends numbers ("error:20"), Grbl 0.9 sends text ("error: Unsupported command"): both are errors that answer a line
+        if line.hasPrefix("error:") {
+            let rest = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+            return .error(Int(rest) ?? CodeTables.errorCode(matching: rest) ?? 0)
+        }
+        if line.hasPrefix("ALARM:") {
+            let rest = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+            return .alarm(Int(rest) ?? CodeTables.alarmCode(matching: rest) ?? 0)
+        }
         if line.hasPrefix("<") && line.hasSuffix(">") { return .status(line) }
-        if line.hasPrefix("Grbl ") { return .welcome(line) }
+        if line.hasPrefix("Grbl ") || line.hasPrefix("GrblHAL ") { return .welcome(line) }
         if line.hasPrefix("$"), let eq = line.firstIndex(of: "="),
            let n = Int(line[line.index(after: line.startIndex)..<eq]) {
             return .setting(n, String(line[line.index(after: eq)...]))

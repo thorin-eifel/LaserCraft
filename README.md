@@ -6,7 +6,7 @@ preview the job, jog the machine and run it, with a laser-safety check before ev
 ![LaserCraft main window](docs/images/main-window.png)
 
 LaserCraft is written in Swift and SwiftUI and follows Apple's macOS design guidelines (standard toolbar, split view,
-Settings window, light and dark mode, SF Symbols, full keyboard access). It is available in **English, German and French**.
+Settings window, light and dark mode, SF Symbols, full keyboard access). It is available in **English, Deutsch, Français, Español, Italiano, Português (Brasil)**, **Nederlands** and **Polski**.
 The layout follows the Windows program [LaserGRBL](https://github.com/arkypita/LaserGRBL), which it is based on.
 
 **Release 1 Beta 1** (`v1.0.0-beta.1`) — see the [changelog](CHANGELOG.md).
@@ -16,13 +16,29 @@ The layout follows the Windows program [LaserGRBL](https://github.com/arkypita/L
 > with the laser covered or at low power first, and report what you find in the
 > [issues](https://github.com/thorin-eifel/LaserCraft/issues).
 
+## Tested with
+
+LaserCraft is only as good as the machines it has met. This table lists what has really been tried — please add your machine with
+the [hardware report](https://github.com/thorin-eifel/LaserCraft/issues/new?template=hardware-report.yml).
+
+| Machine | Firmware | Connection | Result | By |
+|---|---|---|---|---|
+| Diode laser on a Seeeduino Nano | Grbl 1.1 | USB serial, 115200 baud | ✅ connecting and running jobs confirmed ("it just works") | author |
+| Built-in simulator (demo machine) | Grbl 1.1 look-alike | pseudo serial port | ✅ automatic tests: streaming, jog, hold, overrides, resume, cooling, e-stop, lost "ok" | tests |
+| Fake controller | Ortur-style Grbl 1.1 | TCP (local) | ✅ automatic test: connect, firmware detection, job | tests |
+| grblHAL, FluidNC | — | USB, Telnet, WebSocket | ⚠️ detection and tables written from LaserGRBL's data, **not tried on a real machine** | — |
+| Ortur / Longer controllers | — | USB, WiFi | ⚠️ not tried on a real machine | — |
+| Grbl 0.9 | — | USB | ⚠️ status and error parsing covered by tests, **no real machine** | — |
+| Camera window (USB / iPhone) | — | — | ⚠️ not tried on a real camera | — |
+
 ## Features
 
 - **Connect** to any Grbl 0.9 / 1.1 controller over USB serial (9600 – 921600 baud), with live status, position and buffer.
 - **Open G-code** (`.nc .gcode .gc .ngc .tap …`), preview it with zoom and pan, see the time estimate, save it again.
 - **Import pictures** (PNG, JPEG, BMP, TIFF, GIF, HEIC) and convert them to engraving G-code: line-to-line or 1-bit dithering
   (9 methods), horizontal / vertical / diagonal, brightness, contrast, white clip, invert, power range, M3 / M4, size and offset.
-- **Vector files and text:** import **SVG** (paths with curves and arcs, shapes, groups, transforms, viewBox and units), add
+- **Vector files and text:** import **SVG** (paths with curves and arcs, shapes, groups, transforms, viewBox and units), **DXF**
+  (lines, arcs, circles, polylines, splines, blocks, units) and **PDF** (vector lines of a page), add
   **text** (single-stroke Hershey letters for engraving, or the outlines of any installed font, with `{n}` serial numbers) and
   **trace pictures** into outlines or centerlines. Shortest-travel ordering and "inner shapes first" for clean cuts.
 - **Layout editor:** several pictures, SVGs and texts on one work area, moved and scaled with the mouse, on **layers** (engrave
@@ -50,9 +66,18 @@ The layout follows the Windows program [LaserGRBL](https://github.com/arkypita/L
 - **Auto-cooling:** optional regular pauses (laser off) so a diode laser does not overheat; **auto-reconnect** if the USB
   connection drops while idle.
 - **Updates:** *Check for Updates…* looks for a newer release on GitHub (never installs by itself).
-- **Languages:** English, Deutsch, Français, Español, Italiano, Português (Brasil).
+- **Languages:** English, Deutsch, Français, Español, Italiano, Português (Brasil); Nederlands and Polski cover most of the interface (the rest is English).
 - **Universal app** for Apple silicon and Intel, with a disk-image script (`scripts/make_dmg.sh`) and a notarisation guide
   ([docs/RELEASING.md](docs/RELEASING.md)).
+- **Layout editor extras:** zoom and pan, turning by any angle (15° snap), several objects at once, align / distribute and **arrays**
+  with consecutive serial numbers.
+- **Smooth tracing:** Bézier curve fitting for traced pictures (round shapes, far fewer lines, sharp corners) and a **scan offset**
+  test and setting for two-way picture engraving.
+- **Keyboard control:** arrows, big steps, Z, jog step and speed, power override and the first nine custom buttons from the
+  keyboard (all re-assignable), and **continuous jogging** while a key or pad button is held.
+- **Emergency Stop** button (⌥⌘.) that works in every state, and a **buffer watchdog** that rescues a job after a lost "ok".
+- **Push messages** (ntfy or webhook, with minimum job duration) and **Dock progress**; **console filter** and search;
+  **save options** (header, footer, passes, LF / CRLF); **job history** with pictures.
 - **Jog** (Grbl 1.1 jog commands) with speed and step sliders, **Home**, **Unlock**, **Set Zero**, **Frame** the job outline.
 - **Real-time overrides** for speed (G1), rapids (G0) and power (S).
 - **Console** with command history, **G-code list** with ✓ / ✕ per line, Grbl `$` **configuration** table (edit, export, import).
@@ -89,7 +114,7 @@ The app is signed ad hoc (not notarised). The first time, **right-click the app 
 
 ## Try it without a laser
 
-The folder [`examples/`](examples) contains `demo-shapes.nc` (circles and a star) and `sample-picture.png` (to try the image
+The folder [`examples/`](examples) contains `demo-shapes.nc` (circles and a star), `sample-bracket.dxf` (a CAD drawing) and `sample-picture.png` (to try the image
 import). Open them with *Open G-code* / *Import Image*. Without a laser, choose **Simulator (demo machine)** as the port and press
 connect: the simulated machine moves, reports and reacts like a Grbl 1.1 controller.
 

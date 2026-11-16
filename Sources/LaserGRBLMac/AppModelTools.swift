@@ -5,6 +5,15 @@ import LaserGRBLCore
 
 enum MainMode: String, CaseIterable { case job, layout }
 
+/// What a vector file is, by its extension (SVG is the default for anything unknown).
+enum VectorFileKind {
+    case svg, dxf, pdf
+    init(_ url: URL) {
+        switch url.pathExtension.lowercased() { case "dxf": self = .dxf; case "pdf": self = .pdf; default: self = .svg }
+    }
+    static let extensions = ["svg", "dxf", "pdf"]
+}
+
 enum VectorSource: Equatable {
     case svg(URL)
     case trace(URL)
@@ -13,7 +22,7 @@ enum VectorSource: Equatable {
 
 enum ToolSheet: Identifiable, Equatable {
     case vector(VectorSource)
-    case testPatterns, materials, profiles, statistics, network
+    case testPatterns, materials, profiles, statistics, network, history
     var id: String {
         switch self {
         case .vector(let s): return "vector-\(s)"
@@ -22,6 +31,7 @@ enum ToolSheet: Identifiable, Equatable {
         case .profiles: return "profiles"
         case .statistics: return "statistics"
         case .network: return "network"
+        case .history: return "history"
         }
     }
 }
@@ -114,8 +124,8 @@ extension AppModel {
 
     func addSVGToLayout() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "svg") ?? .xml]
-        panel.message = L("Choose an SVG file")
+        panel.allowedContentTypes = VectorFileKind.extensions.compactMap { UTType(filenameExtension: $0) }
+        panel.message = L("Choose a vector file (SVG, DXF or PDF)")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         tool = .vector(.svg(url))
     }

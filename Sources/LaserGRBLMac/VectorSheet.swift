@@ -45,7 +45,7 @@ struct MaterialPicker: View {
     }
 }
 
-/// Imports vector artwork (SVG), traces a picture, or lays out a text; then burns it as lines or filled areas.
+/// Imports vector artwork (SVG, DXF, PDF; the `.svg` source stands for any vector file), traces a picture, or lays out a text; then burns it as lines or filled areas.
 struct VectorSheet: View {
     let source: VectorSource
     @EnvironmentObject var app: AppModel
@@ -60,6 +60,8 @@ struct VectorSheet: View {
     @State private var settings = VectorSettings()
     @State private var layerID = 1
     @State private var dpi = 96.0
+    @State private var page = 1
+    @State private var pageCount = 1
     @State private var trace = TraceOptions()
     @State private var spec = TextSpec()
     @State private var errorText: String?
@@ -69,7 +71,7 @@ struct VectorSheet: View {
     private var shapes: [Polyline] { VectorMath.fit(base, toX: offsetX, y: offsetY, width: width, height: height) }
 
     private var title: String {
-        switch source { case .svg: return L("Import SVG"); case .trace: return L("Trace Image"); case .text: return L("Add Text") }
+        switch source { case .svg: return L("Import Vector File"); case .trace: return L("Trace Image"); case .text: return L("Add Text") }
     }
     private var sourceName: String {
         switch source {
@@ -79,7 +81,7 @@ struct VectorSheet: View {
     }
     private var sourceKey: String {
         switch source {
-        case .svg(let u): return "svg|\(u.path)|\(dpi)"
+        case .svg(let u): return "svg|\(u.path)|\(dpi)|\(page)"
         case .trace(let u): return "trace|\(u.path)|" + Self.stableJSON(trace)
         case .text: return "text|" + Self.stableJSON(spec)
         }
@@ -130,17 +132,32 @@ struct VectorSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.title3).fontWeight(.semibold)
             switch source {
-            case .svg:
-                Picker("Resolution of unitless sizes", selection: $dpi) { Text("96 dpi (browsers, Inkscape)").tag(96.0); Text("72 dpi (Illustrator)").tag(72.0) }
-                Text("Sizes in mm, cm, in or pt are used as they are. Text in the file is not read: convert it to paths first.").font(.caption).foregroundStyle(.secondary)
+            case .svg(let url):
+                switch VectorFileKind(url) {
+                case .svg:
+                    Picker("Resolution of unitless sizes", selection: $dpi) { Text("96 dpi (browsers, Inkscape)").tag(96.0); Text("72 dpi (Illustrator)").tag(72.0) }
+                    Text("Sizes in mm, cm, in or pt are used as they are. Text in the file is not read: convert it to paths first.").font(.caption).foregroundStyle(.secondary)
+                case .dxf:
+                    Text("The drawing's units (INSUNITS) are converted to mm; without them 1 unit = 1 mm. Lines, arcs, circles, ellipses, polylines, splines and blocks are read; text, hatches and dimensions are not.").font(.caption).foregroundStyle(.secondary)
+                case .pdf:
+                    if pageCount > 1 { Stepper(L("Page %d of %d", page, pageCount), value: $page, in: 1...pageCount) }
+                    Text("The vector lines of the page are read, in their real size. Pictures and scanned pages are not vectors: use Trace Image for those. Text is only read when it is stored as outlines.").font(.caption).foregroundStyle(.secondary)
+                }
             case .trace:
                 VStack(alignment: .leading, spacing: 6) {
                     Picker("Method", selection: $trace.centerline) { Text("Outline").tag(false); Text("Centerline").tag(true) }.pickerStyle(.segmented)
                     labelSlider("Threshold", Binding(get: { Double(trace.threshold) }, set: { trace.threshold = Int($0) }), 10...245)
                     Toggle("Invert", isOn: $trace.invert)
-                    labelSlider("Smoothing", Binding(get: { Double(trace.smoothing) }, set: { trace.smoothing = Int($0) }), 0...3, step: 1)
+                    Toggle("Smooth curves (Bézier fitting)", isOn: $trace.curves)
+                        .help("Fits smooth curves through the outline: rounder shapes with far fewer lines. Corners stay sharp.")
+                    if trace.curves {
+                        labelSlider("Curve error", $trace.curveError, 0.3...2)
+                        labelSlider("Corner angle", $trace.cornerAngle, 20...120)
+                    } else {
+                        labelSlider("Smoothing", Binding(get: { Double(trace.smoothing) }, set: { trace.smoothing = Int($0) }), 0...3, step: 1)
+                        labelSlider("Simplify", $trace.tolerance, 0...3)
+                    }
                     labelSlider("Ignore specks", Binding(get: { Double(trace.minArea) }, set: { trace.minArea = Int($0) }), 0...200)
-                    labelSlider("Simplify", $trace.tolerance, 0...3)
                 }
             case .text:
                 VStack(alignment: .leading, spacing: 6) {
@@ -254,10 +271,17 @@ struct VectorSheet: View {
         defer { working = false }
         switch source {
         case .svg(let url):
-            let d = dpi
+            let d = dpi, pg = page
+            let kind = VectorFileKind(url)
+            if kind == .pdf, pageCount <= 1 { pageCount = max(1, PDFImport.pageCount(of: url)) }
             let result: Result<[Polyline], Error> = await Task.detached {
-                var o = SVGOptions(); o.dpi = d
-                return Result { try SVGParser.parse(contentsOf: url, options: o) }
+                switch kind {
+                case .svg:
+                    var o = SVGOptions(); o.dpi = d
+                    return Result { try SVGParser.parse(contentsOf: url, options: o) }
+                case .dxf: return Result { try DXFParser.parse(contentsOf: url) }
+                case .pdf: return Result { try PDFImport.parse(contentsOf: url, page: pg) }
+                }
             }.value
             switch result {
             case .success(let lines): setBase(lines, keepSize: false)

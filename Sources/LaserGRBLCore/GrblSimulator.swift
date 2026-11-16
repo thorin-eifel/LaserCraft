@@ -21,7 +21,7 @@ public final class GrblSimulator {
     private var stopFlag = false
 
     // machine state (touched only by the simulator thread)
-    private struct Block { var from: (Double, Double); var to: (Double, Double); var feed: Double; var rapid: Bool; var power: Double; var jog: Bool }
+    private struct Block { var from: (Double, Double); var to: (Double, Double); var feed: Double; var rapid: Bool; var power: Double; var jog: Bool; var pause = false; var z: Double? = nil }
     private var pos = (x: 0.0, y: 0.0, z: 0.0)
     private var wco = (x: 0.0, y: 0.0, z: 0.0)
     private var queue: [Block] = []
@@ -159,6 +159,8 @@ public final class GrblSimulator {
         var budget = dt * speedFactor
         while budget > 0, !queue.isEmpty {
             let b = queue[0]
+            if b.pause { queue.removeFirst(); progress = 0; hold = true; return }      // M0: stop until the person resumes
+            if let z = b.z { pos.z = z; queue.removeFirst(); progress = 0; continue }
             let len = hypot(b.to.0 - b.from.0, b.to.1 - b.from.1)
             let rate = (b.rapid ? rapidRate * Double(overrides.rapid) / 100 : b.feed * Double(overrides.feed) / 100) / 60   // mm/s
             if len < 0.0001 || rate <= 0 { queue.removeFirst(); progress = 0; continue }
@@ -181,15 +183,19 @@ public final class GrblSimulator {
     private func drainPending() {
         while let line = pending.first {
             let clean = line.trimmingCharacters(in: .whitespaces).uppercased()
-            let isMotion = clean.contains("X") || clean.contains("Y") || clean.hasPrefix("$J=")
+            let isMotion = clean.contains("X") || clean.contains("Y") || clean.contains("Z") || clean.hasPrefix("$J=") || clean.contains("M0")
             if isMotion && queue.count >= 15 { return }
             pending.removeFirst()
             execute(clean)
         }
     }
 
+    /// Test hook: the next `n` "ok" answers are swallowed, as if bytes were lost on the cable.
+    public var dropAcknowledgements = 0
+
     private func ack(_ text: String = "ok") {
         if !rxUsed.isEmpty { rxUsed.removeFirst() }
+        if dropAcknowledgements > 0 && text == "ok" { dropAcknowledgements -= 1; return }
         send(text + "\r\n")
     }
 
@@ -254,6 +260,8 @@ public final class GrblSimulator {
         var nx: Double?, ny: Double?, ni = 0.0, nj = 0.0
         var dwell: Double?
         var setWCO = false
+        var pauseHere = false
+        var nz: Double?
         for (c, v) in words(line) {
             switch c {
             case "G":
@@ -267,7 +275,9 @@ public final class GrblSimulator {
                 case 92: setWCO = true
                 default: break
                 }
-            case "M": if Int(v) == 3 || Int(v) == 4 { laserOn = true } else if Int(v) == 5 { laserOn = false }
+            case "M":
+                if Int(v) == 3 || Int(v) == 4 { laserOn = true } else if Int(v) == 5 { laserOn = false } else if Int(v) == 0 { pauseHere = true }
+            case "Z": nz = v
             case "S": spindle = v
             case "F": feed = v * (inches ? 25.4 : 1)
             case "X": nx = v
@@ -285,6 +295,14 @@ public final class GrblSimulator {
             ack(); return
         }
         if motion >= 0 { modalMotion = motion }
+        if let z = nz {
+            let end = queue.last?.to ?? (pos.x, pos.y)
+            queue.append(Block(from: end, to: end, feed: feed, rapid: true, power: 0, jog: false, z: absolute ? z : pos.z + z))
+        }
+        if pauseHere {
+            let end = queue.last?.to ?? (pos.x, pos.y)
+            queue.append(Block(from: end, to: end, feed: feed, rapid: false, power: 0, jog: false, pause: true))
+        }
         if nx != nil || ny != nil {
             let k = inches ? 25.4 : 1.0
             // the last queued block's end is where this move starts

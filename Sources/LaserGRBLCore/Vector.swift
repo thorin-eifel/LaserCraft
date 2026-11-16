@@ -61,6 +61,17 @@ public struct Affine: Equatable, Codable {
 }
 
 public enum VectorMath {
+    /// Largest coordinate (mm) accepted from an imported file: 100 m. Anything beyond is a damaged or hostile file.
+    public static let maxCoordinate = 100_000.0
+
+    /// Drops the shapes that have a point that is not a finite number or lies absurdly far away, and shapes with fewer than two
+    /// points. Files from the internet can contain `1e308` or `NaN`; one such point would break sizes, previews and G-code.
+    public static func sanitized(_ lines: [Polyline]) -> [Polyline] {
+        lines.filter { l in
+            l.points.count >= 2 && l.points.allSatisfy { $0.x.isFinite && $0.y.isFinite && abs($0.x) <= maxCoordinate && abs($0.y) <= maxCoordinate }
+        }
+    }
+
     public static func bounds(_ lines: [Polyline]) -> Bounds {
         var b = Bounds()
         for l in lines { for p in l.points { b.add(p.x, p.y) } }
@@ -166,8 +177,9 @@ public final class SVGParser: NSObject, XMLParserDelegate {
         xml.shouldProcessNamespaces = false
         _ = xml.parse()
         guard p.sawSVG else { throw SVGError.notSVG }
-        guard !p.shapes.isEmpty else { throw SVGError.empty }
-        return p.shapes
+        let shapes = VectorMath.sanitized(p.shapes)
+        guard !shapes.isEmpty else { throw SVGError.empty }
+        return shapes
     }
 
     public static func parse(contentsOf url: URL, options: SVGOptions = SVGOptions()) throws -> [Polyline] {

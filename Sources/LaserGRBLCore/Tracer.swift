@@ -15,6 +15,10 @@ public struct TraceOptions: Codable, Equatable {
     public var smoothing = 1
     /// Corners sharper than this angle (degrees) are kept sharp while smoothing.
     public var cornerAngle = 60.0
+    /// Fit Bézier curves through the outline (smooth, few points) instead of straight stairs.
+    public var curves = true
+    /// How far a fitted curve may stay away from the outline, in pixels.
+    public var curveError = 0.8
     public init() {}
 }
 
@@ -85,7 +89,9 @@ public enum Tracer {
             }
             var poly = Polyline(pts, closed: true)
             if Int(abs(poly.signedArea)) < o.minArea { continue }
-            poly.points = refine(pts, o)
+            poly.points = o.curves
+                ? CurveFit.smooth(loop, closed: true, tolerance: o.curveError, cornerAngle: o.cornerAngle)
+                : refine(pts, o)
             if poly.points.count > 2 { out.append(poly) }
           }
         }
@@ -207,7 +213,8 @@ public enum Tracer {
         return out.compactMap { l in
             guard l.length >= Double(max(2, o.minArea / 3)) else { return nil }
             var l = l
-            l.points = VectorMath.simplify(l.points, tolerance: max(0.5, o.tolerance))
+            if o.curves, l.points.count > 8 { l.points = CurveFit.smooth(l.points, closed: false, tolerance: max(0.5, o.curveError), cornerAngle: o.cornerAngle) }
+            l.points = VectorMath.simplify(l.points, tolerance: max(0.3, o.curves ? 0.2 : o.tolerance))
             if let f = l.points.first, let e = l.points.last, l.points.count > 3, f.distance(to: e) < 1.5 { l.closed = true; l.points.removeLast() }
             return l
         }

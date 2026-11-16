@@ -29,13 +29,15 @@ private struct SheetFrame<Content: View>: View {
 struct TestPatternsSheet: View {
     @EnvironmentObject var app: AppModel
     @Environment(\.dismiss) var dismiss
-    enum Kind: String, CaseIterable, Identifiable { case powerSpeed, cutting, shake, resolution, calibration; var id: String { rawValue } }
+    enum Kind: String, CaseIterable, Identifiable { case powerSpeed, cutting, shake, resolution, calibration, scanOffset; var id: String { rawValue } }
     @State private var kind: Kind = .powerSpeed
     @State private var grid = TestPatterns.PowerSpeedGrid()
     @State private var cut = TestPatterns.CuttingGrid()
     @State private var cutSpeedsText = "100, 200, 300, 400, 600"
     @State private var cutPassesText = "1, 2, 3"
     @State private var shake = TestPatterns.Shake()
+    @State private var scanSpeed = 3000.0
+    @State private var scanPower = 20.0
     @State private var squareSize = 100.0
     @State private var squarePower = 10.0
     @State private var squareSpeed = 1500.0
@@ -56,6 +58,7 @@ struct TestPatternsSheet: View {
             Picker("Test", selection: $kind) {
                 Text("Power and speed").tag(Kind.powerSpeed); Text("Cutting test").tag(Kind.cutting); Text("Shake test").tag(Kind.shake)
                 Text("Line distance and focus").tag(Kind.resolution); Text("Calibration square").tag(Kind.calibration)
+                Text("Scan offset").tag(Kind.scanOffset)
             }
             ScrollView { VStack(alignment: .leading, spacing: 10) { form }.frame(maxWidth: .infinity, alignment: .leading) }
                 .frame(height: 330)
@@ -135,6 +138,12 @@ struct TestPatternsSheet: View {
         case .resolution:
             Text("Blocks of lines with decreasing distance. The finest block that still shows separate lines is the best line distance for your laser; the narrowest, sharpest line shows good focus.")
                 .font(.callout).foregroundStyle(.secondary)
+        case .scanOffset:
+            Text("When the laser engraves line by line in both directions, the lines that run backwards land a little off and the edges look jagged. This burns nine blocks with different offsets: the block with the straightest edges shows the value to enter as Scan offset in the picture import.")
+                .font(.callout).foregroundStyle(.secondary)
+            UnitRow("Speed", value: $scanSpeed, range: 100...30000, unit: "mm/min", digits: 0)
+            UnitRow("Power", value: $scanPower, range: 1...100, unit: "%", digits: 0)
+            Text("Use the speed you engrave pictures with: the lag grows with the speed.").font(.caption).foregroundStyle(.secondary)
         case .calibration:
             Text("Burns a square. Measure its sides with a ruler or calipers and enter the result: LaserCraft calculates new steps per mm for $100 and $101.")
                 .font(.callout).foregroundStyle(.secondary)
@@ -185,9 +194,10 @@ struct TestPatternsSheet: View {
             lines = TestPatterns.cuttingTest(c, maxS: maxS)
         case .shake: var s = shake; s.dynamicPower = dyn; lines = TestPatterns.shakeTest(s, maxS: maxS)
         case .resolution: lines = TestPatterns.resolutionTest(dynamicPower: dyn, maxS: maxS)
+        case .scanOffset: lines = TestPatterns.scanOffsetTest(speed: scanSpeed, powerPercent: scanPower, dynamicPower: dyn, maxS: maxS)
         case .calibration: lines = TestPatterns.calibrationSquare(size: squareSize, speed: squareSpeed, powerPercent: squarePower, dynamicPower: dyn, maxS: maxS)
         }
-        let name = ["Power and speed test", "Cutting test", "Shake test", "Line distance test", "Calibration square"][Kind.allCases.firstIndex(of: kind)!]
+        let name = ["Power and speed test", "Cutting test", "Shake test", "Line distance test", "Calibration square", "Scan offset test"][Kind.allCases.firstIndex(of: kind)!]
         app.setProgram(GCodeProgram(text: lines.joined(separator: "\n"), name: name + ".nc", rapidRate: app.rapidRate))
         app.mainMode = .job
         dismiss()

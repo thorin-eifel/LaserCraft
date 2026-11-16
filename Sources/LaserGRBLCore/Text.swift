@@ -27,7 +27,12 @@ public enum TextTemplate {
         let df = DateFormatter(); df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd"; out = out.replacingOccurrences(of: "{date}", with: df.string(from: date))
         df.dateFormat = "HH:mm"; out = out.replacingOccurrences(of: "{time}", with: df.string(from: date))
-        // {n} and {n:width}
+        return expandSerial(out, serial: serial)
+    }
+
+    /// Replaces only `{n}` / `{n:3}`; `{date}` and `{time}` stay as they are.
+    public static func expandSerial(_ s: String, serial: Int) -> String {
+        var out = s
         if let re = try? NSRegularExpression(pattern: "\\{n(?::(\\d{1,2}))?\\}") {
             let ns = out as NSString
             var result = "", last = 0

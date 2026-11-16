@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Writes Resources/{en,de,fr,es,it,pt-BR}.lproj/Localizable.strings from translations.py and checks nothing is missing."""
+"""Writes Resources/{en,de,fr,es,it,pt-BR,nl,pl}.lproj/Localizable.strings from translations.py and checks nothing is missing."""
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import extract_keys
 import translations as T
 import translations_extra as X
 import translations_r3 as R3
+import translations_r4 as R4
+import translations_r5 as R5
+import translations_r6 as R6
+import translations_more as MORE
 
 # release 3 strings: (de, fr, es, it, pt-BR)
-for _k, _v in R3.R3.items():
+for _k, _v in list(R3.R3.items()) + list(R4.R4.items()) + list(R5.R5.items()):
     T.UI[_k] = (_v[0], _v[1])
     X.EXTRA[_k] = (_v[2], _v[3], _v[4])
+
+# beta 6 strings carry Dutch and Polish too: (de, fr, es, it, pt-BR, nl, pl)
+for _k, _v in R6.R6.items():
+    T.UI[_k] = (_v[0], _v[1])
+    X.EXTRA[_k] = (_v[2], _v[3], _v[4])
+    MORE.MORE[_k] = (_v[5], _v[6])
 
 root = pathlib.Path(__file__).resolve().parent.parent
 keys = extract_keys.keys()
@@ -75,4 +85,22 @@ for lang, idx in (("es", 0), ("it", 1), ("pt-BR", 2)):
     d = root / "Resources" / f"{lang}.lproj"
     d.mkdir(parents=True, exist_ok=True)
     (d / "Localizable.strings").write_text("\n".join(lines) + "\n", encoding="utf-8")
-print(f"wrote {len(keys)} keys x 6 languages")
+
+# Dutch and Polish: partial. Only the keys that are translated are written; the rest falls back to the English key.
+for lang, idx in (("nl", 0), ("pl", 1)):
+    lines = [f"/* LaserCraft - {lang} (partial: untranslated texts show in English) */"]
+    done = 0
+    for k in keys:
+        if k not in MORE.MORE:
+            continue
+        v = MORE.MORE[k][idx]
+        if v.count("%") != k.count("%"):
+            print("FORMAT MISMATCH", lang, k)
+            sys.exit(1)
+        lines.append(f'"{esc(k)}" = "{esc(v)}";')
+        done += 1
+    d = root / "Resources" / f"{lang}.lproj"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Localizable.strings").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"{lang}: {done} of {len(keys)} keys translated")
+print(f"wrote {len(keys)} keys x 6 languages + nl, pl (partial)")

@@ -78,12 +78,13 @@ final class LayoutModelTests: XCTestCase {
         let img = m.addImage(data: pngData(), name: "pic", options: { var o = RasterOptions(); o.widthMM = 40; return o }())
         XCTAssertEqual(img?.width, 40); XCTAssertEqual(img?.height, 40)
         XCTAssertNotNil(m.cgImage((img!.kind.imageID)!))
-        // rotating a picture turns it in 90° steps and swaps its box
+        // pictures turn like every other object: by any angle, around their centre
         m.updateSelected { $0.height = 20 }
         m.rotateSelected(by: 90)
-        XCTAssertEqual(m.selected?.width, 20); XCTAssertEqual(m.selected?.height, 40)
-        guard case .image(_, let opts) = m.selected!.kind else { return XCTFail() }
-        XCTAssertEqual(opts.rotation, 270)
+        XCTAssertEqual(m.selected?.width, 40); XCTAssertEqual(m.selected?.height, 20)
+        XCTAssertEqual(m.selected?.rotation, 90)
+        m.rotateSelected(by: -135)
+        XCTAssertEqual(m.selected?.rotation, 315)
         XCTAssertNil(m.addImage(data: Data([1, 2, 3]), name: "bad"))
         // copies of a picture get their own image entry
         m.duplicateSelection()

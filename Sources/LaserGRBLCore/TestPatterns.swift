@@ -158,4 +158,35 @@ public enum TestPatterns {
         guard current > 0, asked > 0, measured > 0 else { return nil }
         return (current * asked / measured * 1000).rounded() / 1000
     }
+
+    // MARK: Scan offset (bidirectional engraving)
+
+    /// Blocks engraved line by line in both directions, each with a different scan offset. If the laser lags, the edges of a block
+    /// zig-zag; the block with the straightest edges shows the offset to enter in the picture import.
+    public static func scanOffsetTest(offsets: [Double] = [-0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4], speed: Double = 3000,
+                                      powerPercent: Double = 20, linesPerMM: Double = 5, dynamicPower: Bool = true, maxS: Double = 1000) -> [String] {
+        let widthMM = 12.0, heightMM = 6.0, gap = 4.0
+        let w = Int(widthMM * linesPerMM), h = Int(heightMM * linesPerMM)
+        var gray = [UInt8](repeating: 255, count: w * h)
+        let left = Int(Double(w) * 0.2), right = Int(Double(w) * 0.8)
+        for y in 0..<h { for x in left..<right { gray[y * w + x] = 0 } }
+        var out = ["G21", "G90"]
+        var labels: [Polyline] = []
+        for (i, off) in offsets.enumerated() {
+            var o = RasterOptions()
+            o.tool = .lineToLine; o.direction = .horizontal; o.unidirectional = false
+            o.linesPerMM = linesPerMM; o.widthMM = widthMM; o.heightMM = heightMM
+            o.offsetX = Double(i) * (widthMM + gap); o.offsetY = 0
+            o.markSpeed = Int(speed); o.minPower = 0; o.maxPower = Int((powerPercent / 100 * maxS).rounded())
+            o.laserOn = dynamicPower ? "M4" : "M3"; o.pwm = true
+            o.scanOffsetMM = off
+            out.append("; scan offset \(VectorJob.fmt(off)) mm")
+            out += RasterConverter.generate(gray: gray, width: w, height: h, options: o).split(whereSeparator: \.isNewline).map(String.init)
+            var spec = TextSpec(); spec.text = off > 0 ? "+\(VectorJob.fmt(off))" : VectorJob.fmt(off); spec.size = 2
+            labels += VectorMath.transform(TextLayout.polylines(spec), .translate(o.offsetX + 1, -4))
+        }
+        var t = VectorSettings(); t.speed = 1500; t.powerPercent = 15; t.dynamicPower = dynamicPower
+        out += VectorJob.gcode(labels, t, maxS: maxS, header: false)
+        return out
+    }
 }

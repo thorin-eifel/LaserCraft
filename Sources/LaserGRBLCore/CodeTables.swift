@@ -194,3 +194,21 @@ extension CodeTables {
         return nil
     }
 }
+
+
+extension CodeTables {
+    /// The standard error number for a text message (older Grbl versions say "error: Bad number format" instead of "error:2").
+    static func errorCode(matching text: String) -> Int? {
+        let t = text.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return nil }
+        if let hit = errors.first(where: { $0.value.title.lowercased() == t }) { return hit.key }
+        return errors.filter { $0.value.title.lowercased().contains(t) || t.contains($0.value.title.lowercased()) }.min { $0.key < $1.key }?.key
+    }
+
+    static func alarmCode(matching text: String) -> Int? {
+        let t = text.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return nil }
+        if let hit = alarms.first(where: { $0.value.title.lowercased() == t }) { return hit.key }
+        return alarms.filter { $0.value.title.lowercased().contains(t) || t.contains($0.value.title.lowercased()) }.min { $0.key < $1.key }?.key
+    }
+}

@@ -59,14 +59,24 @@ struct GrblConfigView: View {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "grbl-settings.txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let text = keys.map { "$\($0)=\(controller.settings[$0] ?? "")" }.joined(separator: "\n") + "\n"
-        try? text.write(to: url, atomically: true, encoding: .utf8)
+        let text = GrblSettingsFile.text(settings: controller.settings, keys: keys)
+        do { try text.write(to: url, atomically: true, encoding: .utf8) }
+        catch { Self.alert(L("Could not save: %@", error.localizedDescription)) }
+    }
+
+    private static func alert(_ message: String) {
+        let a = NSAlert(); a.messageText = message; a.alertStyle = .warning; a.addButton(withTitle: L("OK")); a.runModal()
     }
 
     private func importSettings() {
         let panel = NSOpenPanel()
-        guard panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("$") && $0.contains("=") }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let text: String
+        do { text = try String(contentsOf: url, encoding: .utf8) }
+        catch { Self.alert(L("Could not read the file: %@", error.localizedDescription)); return }
+        // only numbered settings are sent: a downloaded file must not be able to reset or move the machine
+        let lines = GrblSettingsFile.settingLines(in: text)
+        guard !lines.isEmpty else { Self.alert(L("The file contains no Grbl settings.")); return }
         let a = NSAlert()
         a.messageText = L("Write %d settings to the machine?", lines.count)
         a.informativeText = L("This replaces the current Grbl configuration.")
@@ -90,6 +100,8 @@ struct SettingsView: View {
                 .tabItem { Label { Text("Connection") } icon: { UIcon(name: "plug", size: 16) } }
             JobSettingsTab(controller: app.controller)
                 .tabItem { Label { Text("Job") } icon: { UIcon(name: "play", size: 16) } }
+            KeyboardSettings()
+                .tabItem { Label { Text("Keyboard") } icon: { Image(systemName: "keyboard").font(.system(size: 14)) } }
             PreviewSettings()
                 .tabItem { Label { Text("Preview") } icon: { UIcon(name: "image", size: 16) } }
             ButtonSettings()
@@ -135,6 +147,8 @@ struct AppearanceSettings: View {
                     Text(verbatim: "Español").tag("es")
                     Text(verbatim: "Italiano").tag("it")
                     Text(verbatim: "Português (Brasil)").tag("pt-BR")
+                    Text(verbatim: "Nederlands").tag("nl")
+                    Text(verbatim: "Polski").tag("pl")
                 }
                 .onChange(of: language) { app.setLanguage(language); languageChanged = true }
                 if languageChanged {
@@ -161,8 +175,11 @@ struct AppearanceSettings: View {
                 Text("The laser safety check before every start cannot be turned off.")
             }
 
+            RemoteNotificationSection()
+
             Section {
                 Toggle("Check for updates automatically", isOn: $autoUpdateCheck)
+                    .onChange(of: autoUpdateCheck) { AutoUpdater.shared.automaticChecks = autoUpdateCheck }
                 HStack { Spacer(); Button("Check for Updates…") { app.checkForUpdates(silent: false) } }
             } header: { Text("Updates") } footer: {
                 Text("LaserCraft only looks for a newer version on GitHub; it never installs anything by itself.")

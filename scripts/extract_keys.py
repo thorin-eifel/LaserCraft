@@ -33,6 +33,13 @@ def keys():
     for st in ["Disconnected", "Connecting", "Idle", "Run", "Hold", "Door", "Home", "Alarm", "Check", "Jog", "Sleep", "Tool", "Cooling", "AutoHold"]:
         found.add("state." + st)
     # names shown through LocalizedStringKey(variable), which the patterns above cannot see (BUILT_IN_PRESETS)
+    # alignment menu titles come through a LocalizedStringKey return value
+    found.update(["Left", "Right", "Top", "Bottom", "Center Horizontally", "Center Vertically", "Curve error", "Corner angle"])
+    # titles of the keyboard actions (Core/Hotkeys.swift), shown through L(variable)
+    found.update(["Jog up", "Jog down", "Jog left", "Jog right", "Jog up left", "Jog up right", "Jog down left", "Jog down right",
+                  "Big step up", "Big step down", "Big step left", "Big step right", "Z axis up", "Z axis down",
+                  "Larger jog step", "Smaller jog step", "Faster jog speed", "Slower jog speed",
+                  "Power override +10 %", "Power override −10 %"])
     found.update(["Photo", "Fast draft", "Fine detail", "Sharp logo", "Black and white dots"])
     out = set()
     for k in found:

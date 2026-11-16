@@ -90,7 +90,9 @@ final class ScreenshotsRelease3Tests: XCTestCase {
             var o = RasterOptions(); o.widthMM = 70
             l.addImage(data: data, name: "sample-picture", options: o, layer: 0, at: Pt(30, 95))
         }
-        l.selection = l.doc.objects.first?.id
+        l.mutate { d in if d.objects.count > 2 { d.objects[1].rotation = 20; d.objects[2].rotation = -12 } }
+        l.selection = l.doc.objects.dropFirst().first?.id
+        l.extraSelection = Set(l.doc.objects.suffix(1).map { $0.id })
         model.mainMode = .layout
         try shoot(ContentView(controller: model.controller).environmentObject(model), size: CGSize(width: 1280, height: 780), name: "layout-editor.png", title: "Layout")
     }

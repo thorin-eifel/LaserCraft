@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
-    <key>CFBundleLocalizations</key><array><string>en</string><string>de</string><string>fr</string><string>es</string><string>it</string><string>pt-BR</string></array>
+    <key>CFBundleLocalizations</key><array><string>en</string><string>de</string><string>fr</string><string>es</string><string>it</string><string>pt-BR</string><string>nl</string><string>pl</string></array>
     <key>CFBundleName</key><string>LaserCraft</string>
     <key>CFBundleDisplayName</key><string>LaserCraft</string>
     <key>CFBundleIdentifier</key><string>com.lasercraft.mac</string>
@@ -11,8 +11,9 @@
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
-    <key>LaserCraftVersion</key><string>1.0.0-beta.3</string>
-    <key>CFBundleVersion</key><string>3</string>
+    <key>LaserCraftVersion</key><string>1.0.0-beta.6</string>
+    <key>CFBundleVersion</key><string>6</string>
+    <key>SUFeedURL</key><string>https://raw.githubusercontent.com/thorin-eifel/LaserCraft/main/appcast.xml</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -32,6 +33,17 @@
             <key>CFBundleTypeRole</key><string>Viewer</string>
             <key>LSItemContentTypes</key><array><string>public.svg-image</string></array>
             <key>CFBundleTypeExtensions</key><array><string>svg</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>DXF drawing</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleTypeExtensions</key><array><string>dxf</string></array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key><string>PDF document</string>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>LSItemContentTypes</key><array><string>com.adobe.pdf</string></array>
+            <key>CFBundleTypeExtensions</key><array><string>pdf</string></array>
         </dict>
         <dict>
             <key>CFBundleTypeName</key><string>LaserCraft project</string>

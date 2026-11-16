@@ -1,0 +1,56 @@
+# Beta 6 strings: R6[english key] = (de, fr, es, it, pt-BR, nl, pl)
+R6 = {
+    "Add Vector File…": ("Vektordatei hinzufügen…", "Ajouter un fichier vectoriel…", "Añadir archivo vectorial…", "Aggiungi file vettoriale…", "Adicionar arquivo vetorial…", "Vectorbestand toevoegen…", "Dodaj plik wektorowy…"),
+    "Add a picture, a vector file (SVG, DXF, PDF) or a text with the + button.": (
+        "Füge mit der +-Taste ein Bild, eine Vektordatei (SVG, DXF, PDF) oder einen Text hinzu.",
+        "Ajoutez une image, un fichier vectoriel (SVG, DXF, PDF) ou un texte avec le bouton +.",
+        "Añade una imagen, un archivo vectorial (SVG, DXF, PDF) o un texto con el botón +.",
+        "Aggiungi un’immagine, un file vettoriale (SVG, DXF, PDF) o un testo con il pulsante +.",
+        "Adicione uma imagem, um arquivo vetorial (SVG, DXF, PDF) ou um texto com o botão +.",
+        "Voeg met de +-knop een afbeelding, een vectorbestand (SVG, DXF, PDF) of een tekst toe.",
+        "Dodaj obraz, plik wektorowy (SVG, DXF, PDF) lub tekst przyciskiem +."),
+    "Choose a vector file (SVG, DXF or PDF)": (
+        "Vektordatei wählen (SVG, DXF oder PDF)", "Choisir un fichier vectoriel (SVG, DXF ou PDF)", "Elige un archivo vectorial (SVG, DXF o PDF)",
+        "Scegli un file vettoriale (SVG, DXF o PDF)", "Escolha um arquivo vetorial (SVG, DXF ou PDF)", "Kies een vectorbestand (SVG, DXF of PDF)", "Wybierz plik wektorowy (SVG, DXF lub PDF)"),
+    "Import Vector File": ("Vektordatei importieren", "Importer un fichier vectoriel", "Importar archivo vectorial", "Importa file vettoriale", "Importar arquivo vetorial", "Vectorbestand importeren", "Importuj plik wektorowy"),
+    "Import Vector File…": ("Vektordatei importieren…", "Importer un fichier vectoriel…", "Importar archivo vectorial…", "Importa file vettoriale…", "Importar arquivo vetorial…", "Vectorbestand importeren…", "Importuj plik wektorowy…"),
+    "Lower focus per pass": ("Fokus pro Durchgang absenken", "Abaisser le focus à chaque passe", "Bajar el foco en cada pasada", "Abbassa il fuoco a ogni passata", "Baixar o foco a cada passada", "Focus per doorgang verlagen", "Obniż ostrość przy każdym przejściu"),
+    "Message shown at the pause": ("Meldung bei der Pause", "Message affiché pendant la pause", "Mensaje que se muestra en la pausa", "Messaggio mostrato durante la pausa", "Mensagem mostrada na pausa", "Bericht tijdens de pauze", "Komunikat podczas pauzy"),
+    "Moves the Z axis down by this many mm with every further pass (0 = no Z movement). Z0 must be the focus you set before the job.": (
+        "Fährt die Z-Achse bei jedem weiteren Durchgang um so viele mm nach unten (0 = keine Z-Bewegung). Z0 muss der Fokus sein, den du vor dem Job eingestellt hast.",
+        "Descend l’axe Z de ce nombre de mm à chaque passe supplémentaire (0 = pas de mouvement Z). Z0 doit être le focus réglé avant le travail.",
+        "Baja el eje Z estos mm en cada pasada adicional (0 = sin movimiento Z). Z0 debe ser el foco que ajustaste antes del trabajo.",
+        "Abbassa l’asse Z di questi mm a ogni passata successiva (0 = nessun movimento Z). Z0 deve essere il fuoco impostato prima del lavoro.",
+        "Move o eixo Z para baixo estes mm a cada passada adicional (0 = sem movimento Z). Z0 deve ser o foco ajustado antes do trabalho.",
+        "Beweegt de Z-as bij elke volgende doorgang zoveel mm omlaag (0 = geen Z-beweging). Z0 moet de focus zijn die je vóór de taak instelde.",
+        "Opuszcza oś Z o tyle mm przy każdym kolejnym przejściu (0 = bez ruchu Z). Z0 musi być ostrością ustawioną przed zadaniem."),
+    "Page %d of %d": ("Seite %d von %d", "Page %d sur %d", "Página %d de %d", "Pagina %d di %d", "Página %d de %d", "Pagina %d van %d", "Strona %d z %d"),
+    "Pause before this layer": ("Vor dieser Ebene pausieren", "Pause avant ce calque", "Pausa antes de esta capa", "Pausa prima di questo livello", "Pausar antes desta camada", "Pauze vóór deze laag", "Pauza przed tą warstwą"),
+    "The drawing's units (INSUNITS) are converted to mm; without them 1 unit = 1 mm. Lines, arcs, circles, ellipses, polylines, splines and blocks are read; text, hatches and dimensions are not.": (
+        "Die Einheiten der Zeichnung (INSUNITS) werden in mm umgerechnet; ohne Angabe gilt 1 Einheit = 1 mm. Linien, Bögen, Kreise, Ellipsen, Polylinien, Splines und Blöcke werden gelesen; Text, Schraffuren und Bemaßungen nicht.",
+        "Les unités du dessin (INSUNITS) sont converties en mm ; sans indication, 1 unité = 1 mm. Lignes, arcs, cercles, ellipses, polylignes, splines et blocs sont lus ; texte, hachures et cotes ne le sont pas.",
+        "Las unidades del dibujo (INSUNITS) se convierten a mm; sin ellas, 1 unidad = 1 mm. Se leen líneas, arcos, círculos, elipses, polilíneas, splines y bloques; no se leen textos, sombreados ni cotas.",
+        "Le unità del disegno (INSUNITS) sono convertite in mm; senza di esse 1 unità = 1 mm. Vengono lette linee, archi, cerchi, ellissi, polilinee, spline e blocchi; testo, tratteggi e quote no.",
+        "As unidades do desenho (INSUNITS) são convertidas para mm; sem elas, 1 unidade = 1 mm. Linhas, arcos, círculos, elipses, polilinhas, splines e blocos são lidos; texto, hachuras e cotas não.",
+        "De eenheden van de tekening (INSUNITS) worden naar mm omgerekend; zonder opgave geldt 1 eenheid = 1 mm. Lijnen, bogen, cirkels, ellipsen, polylijnen, splines en blokken worden gelezen; tekst, arceringen en maatlijnen niet.",
+        "Jednostki rysunku (INSUNITS) są przeliczane na mm; bez nich 1 jednostka = 1 mm. Odczytywane są linie, łuki, okręgi, elipsy, polilinie, krzywe złożone i bloki; tekst, kreskowania i wymiary nie."),
+    "The job stops here with a message, for example to flip the material. Resume continues it.": (
+        "Der Job hält hier mit einer Meldung an, zum Beispiel um das Material zu wenden. „Fortsetzen“ führt ihn weiter.",
+        "Le travail s’arrête ici avec un message, par exemple pour retourner le matériau. « Reprendre » le poursuit.",
+        "El trabajo se detiene aquí con un mensaje, por ejemplo para dar la vuelta al material. «Reanudar» lo continúa.",
+        "Il lavoro si ferma qui con un messaggio, ad esempio per girare il materiale. «Riprendi» lo continua.",
+        "O trabalho para aqui com uma mensagem, por exemplo para virar o material. «Retomar» continua.",
+        "De taak stopt hier met een bericht, bijvoorbeeld om het materiaal om te draaien. ‘Hervatten’ gaat verder.",
+        "Zadanie zatrzymuje się tu z komunikatem, np. aby odwrócić materiał. „Wznów” kontynuuje."),
+    "The vector lines of the page are read, in their real size. Pictures and scanned pages are not vectors: use Trace Image for those. Text is only read when it is stored as outlines.": (
+        "Die Vektorlinien der Seite werden in Originalgröße gelesen. Bilder und gescannte Seiten sind keine Vektoren: Dafür gibt es „Bild vektorisieren“. Text wird nur gelesen, wenn er als Umrisse gespeichert ist.",
+        "Les lignes vectorielles de la page sont lues à leur taille réelle. Les images et pages numérisées ne sont pas des vecteurs : utilisez « Vectoriser l’image ». Le texte n’est lu que s’il est enregistré en contours.",
+        "Se leen las líneas vectoriales de la página en su tamaño real. Las imágenes y páginas escaneadas no son vectores: usa «Vectorizar imagen». El texto solo se lee si está guardado como contornos.",
+        "Le linee vettoriali della pagina vengono lette nella dimensione reale. Immagini e pagine scansionate non sono vettori: usa «Vettorializza immagine». Il testo viene letto solo se salvato come contorni.",
+        "As linhas vetoriais da página são lidas no tamanho real. Imagens e páginas digitalizadas não são vetores: use «Vetorizar imagem». O texto só é lido se estiver salvo como contornos.",
+        "De vectorlijnen van de pagina worden op ware grootte gelezen. Afbeeldingen en gescande pagina’s zijn geen vectoren: gebruik daarvoor ‘Afbeelding vectoriseren’. Tekst wordt alleen gelezen als die als contouren is opgeslagen.",
+        "Linie wektorowe strony są odczytywane w rzeczywistym rozmiarze. Obrazy i zeskanowane strony nie są wektorami: użyj „Wektoryzuj obraz”. Tekst jest odczytywany tylko, gdy jest zapisany jako kontury."),
+    "The file contains no Grbl settings.": (
+        "Die Datei enthält keine Grbl-Einstellungen.", "Le fichier ne contient aucun réglage Grbl.", "El archivo no contiene ajustes de Grbl.",
+        "Il file non contiene impostazioni Grbl.", "O arquivo não contém configurações do Grbl.", "Het bestand bevat geen Grbl-instellingen.", "Plik nie zawiera ustawień Grbl."),
+}

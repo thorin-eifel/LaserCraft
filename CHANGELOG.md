@@ -1,6 +1,51 @@
 # Changelog
 
-## Unreleased — Release 1 Beta 3 (1.0.0-beta.3)
+## Unreleased — Release 1 Beta 6 (1.0.0-beta.6)
+
+- **DXF and PDF import** (*File → Import Vector File…*): DXF lines, arcs, circles, ellipses, polylines with bulges, splines and
+  blocks with the drawing's units and layer names; PDF vector paths of any page at real size (also inside form objects).
+- **Pause and focus per layer:** *Pause before this layer* (laser off, message, `M0`; Resume continues) and *Lower focus per
+  pass* (Z axis, back to Z0 at the end). The simulator understands `M0` and Z moves. Older project files still open.
+- **Review of the code for safety and errors:** files from the internet can no longer crash the importers (a DXF with an infinite
+  angle or `1e308` radius used to stop the app; SVG, DXF and PDF now drop shapes with non-finite or absurd coordinates);
+  importing a Grbl settings file only sends plain `$n=value` lines (a file with `$RST=*` or `$J=…` can no longer reach the
+  machine); failed saves of settings and projects are reported and leave no half-written files; notification titles with
+  non-ASCII letters are encoded for ntfy. New tests feed the SVG, DXF, PDF and G-code readers hostile data.
+
+## Release 1 Beta 5 (1.0.0-beta.5)
+
+- **Layout editor:** zoom and pan (pinch, ⌘-scroll, ⌘+ ⌘− ⌘0, scrolling, Space + drag); **turning by any angle** with a handle that
+  snaps every 15° (⌥ = free) — pictures included, they are resampled when the job is made; **several objects** (Shift-click, ⌘A) that
+  move, copy and delete together; **Align** and **Distribute**; **Array** with rows × columns, gaps and consecutive `{n}` numbers.
+- **Tracing with curves:** Bézier curve fitting (corner detection + Schneider's algorithm) for outlines and centerlines — rounder shapes and far
+  fewer lines. Not a Potrace port; the old method stays available.
+- **Scan offset** for two-way picture engraving, with a nine-block test pattern (*Tools → Test Patterns → Scan offset*) and a field in
+  the picture import.
+- **Older Grbl:** error and alarm messages given as text (Grbl 0.9) are mapped to the usual numbers; the `GrblHAL` welcome line is
+  recognised. Tests for the 0.9 status format.
+- **Updates with Sparkle** are built in (framework embedded, `scripts/make_appcast.sh`, docs/RELEASING.md). They switch on when
+  `SUPublicEDKey` is added to Info.plist; until then the GitHub release check is used.
+- **Hardware matrix** ("Tested with") in the README and issue templates for hardware reports and bugs.
+- **Languages:** Nederlands and Polski (about 80 % of the interface: menus, buttons, labels, messages; longer explanations and Grbl's own messages stay English until a native speaker completes them; missing texts fall back to English).
+
+## Release 1 Beta 4 (1.0.0-beta.4)
+
+- **Keyboard:** arrows jog, ⌥+arrow big steps, Page up / down for Z, `+` `−` jog step, `[` `]` jog speed, ⌃↑ ⌃↓ power override,
+  ⌃1…⌃9 custom buttons; *Settings → Keyboard* to change every key (conflict detection, restore defaults). Keys are ignored while a
+  text field is edited.
+- **Continuous jogging:** hold a key or pad button to keep moving, release to stop (jog cancel `0x85`; pieces of about half a
+  second so that the machine limits are respected).
+- **Emergency Stop** button and menu command (⌥⌘.): jog cancel, hold, soft reset and `M5`, always without confirmation.
+- **Buffer watchdog:** counters are set right again when Grbl's receive buffer is empty for 3 s while lines are still counted as
+  unanswered.
+- **Push message** to ntfy.sh or a JSON webhook when a job ends, with a minimum duration and a privacy switch for the file name;
+  **Dock progress** (bar, percentage, remaining time).
+- **Console:** filter (sent / received / messages / errors), search, timestamps, auto-scroll on / off.
+- **Save G-code:** options for header, footer, passes and LF / CRLF line endings.
+- **Job history:** the last 40 jobs with picture, result and a copy of the G-code; open them again with a double-click.
+- Spanish, Italian and Portuguese strings for all of it.
+
+## Release 1 Beta 3 (1.0.0-beta.3)
 
 - **Crop to Subject** in the picture import (and for pictures in the layout editor): cuts away the empty border around the
   motif (transparent or flat background); *Reset Crop* undoes it.

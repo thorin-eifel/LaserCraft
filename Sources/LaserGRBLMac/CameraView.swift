@@ -99,7 +99,7 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         guard error == nil, let data = photo.fileDataRepresentation(), let url = pendingTarget else { return }
-        try? data.write(to: url)
+        do { try data.write(to: url) } catch { return }                  // a picture that could not be saved is not counted
         DispatchQueue.main.async { if self.timer != nil { self.frames += 1 } }
     }
 
